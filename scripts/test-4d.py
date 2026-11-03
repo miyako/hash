@@ -123,19 +123,26 @@ def package(source, destination):
 
 
 def test_installed(engine, component):
-    # A hostile package path verifies quoting of the executable itself as well as stdin paths.
     host = BUILD / "installed host ' \" quotes $ &"
+    staging = BUILD / "installed-host-compilation"
     if host.exists():
         shutil.rmtree(host)
-    project = project_at(host)
-    installed = host / "Components/hash.4dbase"
+    if staging.exists():
+        shutil.rmtree(staging)
+    project = project_at(staging)
+    installed = staging / "Components/hash.4dbase"
     installed.parent.mkdir(parents=True)
     shutil.copytree(component, installed)
     methods = project.parent / "Sources/Methods"
     methods.mkdir(parents=True)
     shutil.copy2(ROOT / "tests/host/test_installed.4dm", methods / "test_installed.4dm")
-    cases = fixtures(host)
     compile_project(engine, project, "installed-host", [installed / "hash.4DZ"])
+    # 4D's clang invocation cannot compile paths containing literal quotes.
+    # Move the compiled host afterward to verify hostile runtime resource paths.
+    staging.rename(host)
+    project = host / "Project/host.4DProject"
+    installed = host / "Components/hash.4dbase"
+    cases = fixtures(host)
     report = host / "installed-results.json"
     report.unlink(missing_ok=True)
     run_engine(engine, project, "test_installed",

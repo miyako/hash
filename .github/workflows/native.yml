@@ -2,13 +2,6 @@ name: Native helper build and test
 
 on:
   push:
-    paths:
-      - cli/**
-      - go.mod
-      - LICENSE
-      - scripts/build-native.py
-      - hash/Resources/licenses/Go-LICENSE.txt
-      - .github/workflows/native.yml
   pull_request:
     paths:
       - cli/**
