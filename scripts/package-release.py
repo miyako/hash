@@ -52,7 +52,7 @@ def main():
         raise RuntimeError("Component bytes changed after installed-host verification")
     manifest = {"version": version, "source_revision": revision,
                 "verification": verification, "component_files": inventory,
-                "signing": "No Developer ID signing or notarization; native Go ad-hoc signatures only."}
+                "signing": "No Developer ID signing or notarization; macOS helper locally ad-hoc signed on all slices."}
     args.output.mkdir(parents=True, exist_ok=True)
     archive = args.output / "hash.zip"
     with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as z:

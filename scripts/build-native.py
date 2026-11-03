@@ -4,9 +4,9 @@
 Default (Darwin): python3 scripts/build-native.py [--source-revision REV]
 Native CI subsets: --target macos | windows | windows-arm64
 Only CLI/build inputs are inventoried; concurrent 4D edits are not build inputs.
-No release, version bump, network access, signing or publication is performed.
-macOS Go linker ad-hoc signatures, if present, are retained; later signing changes
-artifact checksums and needs a separate final-byte inventory.
+No release, version bump, network access, Developer ID signing or publication is
+performed. macOS universal outputs receive local ad-hoc signatures on all slices;
+later distribution signing changes checksums and needs a final-byte inventory.
 """
 
 import argparse
@@ -176,6 +176,9 @@ def main():
                 if set(arches) != {"arm64", "x86_64"}:
                     raise RuntimeError(f"incorrect universal architectures: {arches}")
                 output.chmod(0o755)
+                command(["codesign", "--force", "--sign", "-", "--timestamp=none",
+                         "--identifier", "com.miyako.hash", output])
+                command(["codesign", "--verify", "--strict", "--all-architectures", output])
                 target_names = ["darwin/arm64", "darwin/amd64"]
                 native_arch = "arm64" if go_host == ["darwin", "arm64"] else "x86_64"
                 smoke(output, ["/usr/bin/arch", "-" + native_arch], f"darwin/{native_arch} native", fixture)
@@ -277,7 +280,12 @@ def main():
             "licenses/Go-LICENSE.txt": {"sha256": checksum(RESOURCES / "licenses" / "Go-LICENSE.txt"),
                                        "license": "BSD-3-Clause", "scope": "Go runtime and standard library"},
         },
-        "checksum_stage": "after Go linking/universal assembly, before distribution signing",
+        "checksum_stage": "after Go linking/universal assembly and macOS ad-hoc signing, before distribution signing",
+        "macos_signing": {
+            "type": "ad-hoc", "identifier": "com.miyako.hash",
+            "developer_id": False, "notarized": False,
+            "verification": "codesign --verify --strict --all-architectures",
+        } if "macos" in targets else None,
         "execution": execution,
         "windows_arm64_x64_probe": windows_arm64_x64_probe,
         "artifacts": artifacts,

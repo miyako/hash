@@ -91,6 +91,10 @@ Do not tag/publish after a failed gate. When all gates pass, upload `hash.zip`,
 Download uploaded draft bytes, compare checksums, extract and rerun the installed
 fixture before publishing. Never overwrite an existing version or tag.
 
-No Developer ID signing/notarization is claimed. Go's required macOS ad-hoc
-signatures are not Developer ID signatures, notarization, or Gatekeeper approval.
+No Developer ID signing/notarization is claimed. Universal assembly is followed
+by explicit local ad-hoc signing and strict verification of **both** Mach-O slices
+(the Go Intel slice alone is not linker-signed). These are not Developer ID
+signatures, notarization, or Gatekeeper approval. The repository has no configured
+Apple signing/notarization credentials; local identities alone do not identify
+an authorized team/profile for this new component.
 If signing is added, generate checksums again **after** every byte-changing step.
