@@ -554,6 +554,11 @@ def sign_release(source, output, secrets, notary_timeout):
         runner.run("authorize ephemeral private key", [
             "/usr/bin/security", "set-key-partition-list", "-S", "apple-tool:,apple:,codesign:",
             "-s", "-k", secrets["KEYCHAIN_PASSWORD"], keychain])
+        # codesign's private-key lookup still requires a search-list entry even
+        # with --keychain; only the isolated HOME/CFPreferences domain is changed.
+        runner.run("configure isolated keychain search list", [
+            "/usr/bin/security", "list-keychains", "-d", "user", "-s",
+            keychain, "/Library/Keychains/System.keychain"])
         identities, _ = runner.run("select signing identity", [
             "/usr/bin/security", "find-identity", "-v", "-p", "codesigning", keychain])
         fingerprint, identity = select_identity(identities, team)

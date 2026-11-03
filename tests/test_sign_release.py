@@ -259,9 +259,7 @@ class SigningTests(unittest.TestCase):
             self.assertGreater(options["timeout"], 0)
             self.assertTrue(all(name not in options["env"] for name in SIGN.SECRET_NAMES))
             if command[0] == "/usr/bin/security":
-                if command[1] in {"list-keychains", "default-keychain", "login-keychain"}:
-                    self.assertEqual(len(command), 2)
-                else:
+                if len(command) != 2:
                     self.assertEqual(options["env"]["HOME"], str(self.private / "home"))
                     self.assertEqual(options["env"]["HOME"], options["env"]["CFFIXED_USER_HOME"])
             if command[0] == "/usr/bin/xcrun" and command[1:3] == ["notarytool", "submit"]:
@@ -276,6 +274,7 @@ class SigningTests(unittest.TestCase):
                 self.assertNotIn("--team-id", command)
         staplers = [c for c, _ in self.commands if c[1:2] == ["stapler"]]
         self.assertEqual(len(staplers), 4)
+
         self.assertTrue(all(c[-1].endswith(".dmg") for c in staplers))
         assess = [c for c, _ in self.commands if c[0] == "/usr/sbin/spctl"]
         self.assertEqual(len(assess), 4)
@@ -295,6 +294,18 @@ class SigningTests(unittest.TestCase):
                          if c[1:3] == ["notarytool", "log"]]
         self.assertEqual(len(accepted_logs), 4)
         self.assertTrue(all(options["timeout"] == 120 for _, options in accepted_logs))
+
+    def test_private_key_search_list_is_configured_only_in_isolated_home(self):
+        self.sign()
+        changes = [(command, options) for command, options in self.commands
+                   if command[1:2] == ["list-keychains"] and "-s" in command]
+        self.assertEqual(len(changes), 1)
+        command, options = changes[0]
+        self.assertEqual(command[2:5], ["-d", "user", "-s"])
+        self.assertEqual(command[5:], [str(self.private / "release.keychain-db"),
+                                      "/Library/Keychains/System.keychain"])
+        self.assertEqual(options["env"]["HOME"], str(self.private / "home"))
+        self.assertEqual(options["env"]["CFFIXED_USER_HOME"], str(self.private / "home"))
 
     def test_accepted_containers_without_every_nested_slice_ticket_are_rejected(self):
         original = self.fake_run
