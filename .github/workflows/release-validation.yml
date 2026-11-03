@@ -1,0 +1,58 @@
+name: Prepared release source validation
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/release*.yml
+      - .github/workflows/native.yml
+      - .github/workflows/component.yml
+      - scripts/prepare-release.py
+      - scripts/publish-release.py
+      - scripts/build-native.py
+      - tests/test_prepare_release.py
+      - tests/test_publish_release.py
+      - cli/**
+      - version*.go
+      - package.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-validation-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      revision: ${{ steps.prepare.outputs.revision }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - id: prepare
+        name: Prepare local patch commit without release APIs or remote writes
+        run: python3 scripts/prepare-release.py --validate-preparation --increment patch --base "$GITHUB_SHA"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-source
+          path: build/release-source/source.bundle
+          if-no-files-found: error
+          overwrite: true
+  native:
+    needs: prepare
+    uses: ./.github/workflows/native.yml
+    with:
+      source-revision: ${{ needs.prepare.outputs.revision }}
+  component:
+    needs: prepare
+    uses: ./.github/workflows/component.yml
+    with:
+      source-revision: ${{ needs.prepare.outputs.revision }}

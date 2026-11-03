@@ -68,10 +68,17 @@ def main():
     parser.add_argument("--increment", required=True, choices=["patch", "minor", "major"])
     parser.add_argument("--base", required=True)
     parser.add_argument("--publish", action="store_true")
+    parser.add_argument("--validate-preparation", action="store_true",
+                        help="read-only PR exercise of the same bundle handoff; no release APIs")
     args = parser.parse_args()
-    publisher.require_context(args.publish)
-    if not os.environ.get("GITHUB_REF", "").startswith("refs/heads/"):
-        raise RuntimeError("Dispatch from a branch, not a tag")
+    if args.validate_preparation:
+        if (args.publish or os.environ.get("GITHUB_EVENT_NAME") != "pull_request"
+                or os.environ.get("GITHUB_REPOSITORY") != publisher.REPOSITORY):
+            raise RuntimeError("Preparation validation requires a read-only PR, never publication")
+    else:
+        publisher.require_context(args.publish)
+        if not os.environ.get("GITHUB_REF", "").startswith("refs/heads/"):
+            raise RuntimeError("Dispatch from a branch, not a tag")
     api = publisher.GitHub()
     if args.publish:
         main_ref = api.request("GET", "repos/miyako/hash/git/ref/heads/main")
@@ -80,7 +87,8 @@ def main():
     current, version, revision = prepare(
         ROOT, args.base, args.increment, os.environ.get("GITHUB_RUN_ID", ""),
         ROOT / "build/release-source/source.bundle")
-    publisher.require_unused(api, version)
+    if not args.validate_preparation:
+        publisher.require_unused(api, version)
     with Path(os.environ["GITHUB_OUTPUT"]).open("a") as output:
         output.write(f"version={version}\nrevision={revision}\nbase={args.base}\n")
     with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as summary:

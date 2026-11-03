@@ -172,6 +172,23 @@ class PreparationTests(unittest.TestCase):
             PUBLISH.persist_version(api, self.root, self.base, self.base)
         api.request.assert_not_called()
 
+    def test_pr_handoff_validation_never_calls_release_apis(self):
+        env = {"GITHUB_EVENT_NAME": "pull_request", "GITHUB_REPOSITORY": "miyako/hash",
+               "GITHUB_REF": "refs/pull/2/merge", "GITHUB_RUN_ID": "1234",
+               "GITHUB_OUTPUT": str(self.root / "build/output"),
+               "GITHUB_STEP_SUMMARY": str(self.root / "build/summary")}
+        arguments = ["prepare-release.py", "--base", self.base, "--increment", "patch",
+                     "--validate-preparation"]
+        with patch.dict(os.environ, env, clear=True), patch.object(PREPARE, "ROOT", self.root), \
+                patch.object(PUBLISH, "GitHub") as client, patch("sys.argv", arguments):
+            PREPARE.main()
+            client.return_value.request.assert_not_called()
+        for event, publish in (("workflow_dispatch", []), ("pull_request", ["--publish"])):
+            with patch.dict(os.environ, dict(env, GITHUB_EVENT_NAME=event), clear=True), \
+                    patch("sys.argv", arguments + publish):
+                with self.assertRaisesRegex(RuntimeError, "read-only PR"):
+                    PREPARE.main()
+
 
 class WorkflowSourceTests(unittest.TestCase):
     def test_all_consumers_restore_bundle_and_use_prepared_revision(self):
@@ -186,6 +203,17 @@ class WorkflowSourceTests(unittest.TestCase):
             self.assertIn('git checkout --detach "$SOURCE_REVISION"', content)
         native = (ROOT / ".github/workflows/native.yml").read_text()
         self.assertNotIn('--source-revision "${{ github.sha }}"', native)
+
+    def test_pr_handoff_exercises_reusable_workflows_without_production_jobs(self):
+        validation = (ROOT / ".github/workflows/release-validation.yml").read_text()
+        self.assertIn("pull_request:", validation)
+        self.assertIn("contents: read", validation)
+        for forbidden in ("contents: write", "secrets:", "sign-release.py", "--publish"):
+            self.assertNotIn(forbidden, validation)
+        self.assertIn("--validate-preparation", validation)
+        self.assertIn("uses: ./.github/workflows/native.yml", validation)
+        self.assertIn("uses: ./.github/workflows/component.yml", validation)
+        self.assertEqual(validation.count("source-revision: ${{ needs.prepare.outputs.revision }}"), 2)
 
 
 if __name__ == "__main__":

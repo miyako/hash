@@ -162,6 +162,12 @@ source inventories, compilation/runtime receipts, provenance, assets and the
 eventual tag identify that SHA, **not** `github.sha` (the dispatch parent).
 The run summary records both revisions and the version transition.
 
+The read-only **Prepared release source validation** PR workflow exercises this
+same preparation, bundle artifact and reusable four-host/component workflow
+handoff on a local patch commit. It never calls release APIs, persists a source
+ref or runs signing/publication. This is separate from the manual production
+workflow, whose signing and publication jobs still exclude PR events.
+
 In GitHub's **Actions** tab, select **Signed notarized release**, then **Run
 workflow**. For publication, select branch **main**, choose the increment and
 enable **Publish a NEW version from main after all gates**. For a
