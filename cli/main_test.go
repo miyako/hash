@@ -157,10 +157,12 @@ func TestArguments(t *testing.T) {
 			t.Fatal(out.String())
 		}
 		if args[0] == "--architecture" {
-			want := architecture(runtime.GOOS, runtime.GOARCH,
-				os.Getenv("PROCESSOR_ARCHITEW6432"), os.Getenv("PROCESSOR_ARCHITECTURE")) + "\n"
-			if out.String() != want {
-				t.Fatalf("architecture output = %q; want %q", out.String(), want)
+			want, err := hostArchitecture()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out.String() != want+"\n" {
+				t.Fatalf("architecture output = %q; want %q", out.String(), want+"\n")
 			}
 		}
 	}

@@ -19,6 +19,10 @@ process deadline in seconds (greater than zero, maximum 86400). Default: 300.
 Execution is synchronous, suitable for a caller's existing background worker.
 On Windows an additional bounded architecture probe (at most two seconds) selects
 the ARM64 helper when running on Windows ARM. No shell or PowerShell is used.
+The x64 bootstrap uses Windows `IsWow64Process2`, not CPU-name or environment-variable
+heuristics. Windows ARM requires x64 emulation for this bootstrap (also needed by
+an x64 4D host). Older x64 Windows versions predating that API keep their native
+x64 target.
 
 Every result contains `success`, `digest`, `algorithm` (`"sha256"`), `message`,
 `code`, `stderr`, `stdout`, `timedOut`, and `errors`. `exitCode` is present when

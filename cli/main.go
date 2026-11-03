@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"runtime"
 )
 
 const version = "20.0.1"
@@ -36,8 +35,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		case len(args) == 1 && args[0] == "--version":
 			_, err = fmt.Fprintln(stdout, version)
 		case len(args) == 1 && args[0] == "--architecture":
-			_, err = fmt.Fprintln(stdout, architecture(runtime.GOOS, runtime.GOARCH,
-				os.Getenv("PROCESSOR_ARCHITEW6432"), os.Getenv("PROCESSOR_ARCHITECTURE")))
+			var architecture string
+			architecture, err = hostArchitecture()
+			if err == nil {
+				_, err = fmt.Fprintln(stdout, architecture)
+			}
 		case len(args) == 1 && (args[0] == "--help" || args[0] == "-h"):
 			_, err = io.WriteString(stdout, usage)
 		default:

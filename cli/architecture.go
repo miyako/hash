@@ -1,11 +1,14 @@
 package main
 
-import "strings"
+import "fmt"
 
-func architecture(goos, goarch, processorArchW6432, processorArchitecture string) string {
-	if goos == "windows" && goarch == "amd64" &&
-		(strings.EqualFold(processorArchW6432, "ARM64") || strings.EqualFold(processorArchitecture, "ARM64")) {
-		return "arm64"
+func machineArchitecture(machine uint16) (string, error) {
+	switch machine {
+	case 0xaa64:
+		return "arm64", nil
+	case 0x8664:
+		return "amd64", nil
+	default:
+		return "", fmt.Errorf("unsupported native Windows machine: 0x%04x", machine)
 	}
-	return goarch
 }

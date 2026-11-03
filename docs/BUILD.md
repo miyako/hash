@@ -20,7 +20,8 @@ python3 scripts/package-release.py
 
 See `python3 scripts/build-native.py --help` for native build controls. Builds
 record actual source inputs, toolchain, flags, targets, licenses, and executable
-checksums in `Resources/native-provenance.json`. A cross build does **not** prove
+checksums in `Resources/native-provenance.json`, including exact Go driver,
+compiler, linker, assembler, and VERSION-file checksums. A cross build does **not** prove
 native execution. `.github/workflows/native.yml` retains native macOS Intel/ARM
 and Windows x64/ARM runner jobs; queued runners are not failed or passed tests.
 

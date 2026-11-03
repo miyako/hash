@@ -132,6 +132,14 @@ def main():
         raise RuntimeError(f"requires {GO_VERSION} with GOTOOLCHAIN=local, found {actual_go}")
     go_host = command(["go", "env", "GOHOSTOS", "GOHOSTARCH"], env=env).splitlines()
     goroot = Path(command(["go", "env", "GOROOT"], env=env))
+    tool_directory = Path(command(["go", "env", "GOTOOLDIR"], env=env))
+    suffix = ".exe" if go_host[0] == "windows" else ""
+    toolchain_paths = [goroot / "VERSION", goroot / "bin" / ("go" + suffix)]
+    toolchain_paths += [tool_directory / (name + suffix) for name in ("compile", "link", "asm")]
+    toolchain_files = {
+        portable(path.relative_to(goroot)): {"sha256": checksum(path), "size": path.stat().st_size}
+        for path in toolchain_paths
+    }
     license_path = next(
         (path for path in [goroot / "LICENSE", goroot.parent / "LICENSE"] if path.is_file()),
         None,
@@ -205,14 +213,24 @@ def main():
                     execution.append({"target": "windows/" + arch, "status": "passed", "mode": "native"})
                     if arch == "arm64":
                         probe_output = scratch / "hash-windows-amd64-probe.exe"
+                        probe_record = scratch / "windows-arm64-x64-probe.json"
+                        diagnostic = {"phase": "build", "source_revision": revision}
                         try:
                             command(["go", "build", *BUILD_FLAGS, "-o", probe_output, "./cli"],
                                     env=dict(env, GOOS="windows", GOARCH="amd64"))
+                            diagnostic.update({
+                                "phase": "launch", "sha256": checksum(probe_output),
+                                "environment": {key: os.environ.get(key) for key in
+                                                ("PROCESSOR_ARCHITECTURE", "PROCESSOR_ARCHITEW6432")},
+                            })
                             probe = retry_windows_file_access(
                                 lambda: subprocess.run(
                                     [str(probe_output), "--architecture"],
                                     capture_output=True, timeout=30, cwd=ROOT, check=True),
                                 "launch x64 architecture probe")
+                            diagnostic.update({"phase": "validate", "returncode": probe.returncode,
+                                               "stdout": probe.stdout.decode("utf-8", errors="replace"),
+                                               "stderr": probe.stderr.decode("utf-8", errors="replace")})
                             if probe.stdout != b"arm64\n" or probe.stderr:
                                 raise RuntimeError("Windows ARM64 x64 probe did not report arm64")
                             windows_arm64_x64_probe = {
@@ -221,10 +239,16 @@ def main():
                                 "stdout": "arm64\n",
                             }
                             print("PASS Windows ARM64 x64-emulated --architecture probe: arm64", flush=True)
+                        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+                            diagnostic.update({"error": str(error), "error_type": type(error).__name__,
+                                               "winerror": getattr(error, "winerror", None)})
+                            raise
                         finally:
-                            retry_windows_file_access(
-                                lambda: probe_output.unlink(missing_ok=True),
-                                "remove completed x64 architecture probe")
+                            probe_record.write_text(json.dumps(diagnostic, indent=2) + "\n", encoding="utf-8")
+                            if diagnostic.get("error") is None:
+                                retry_windows_file_access(
+                                    lambda: probe_output.unlink(missing_ok=True),
+                                    "remove completed x64 architecture probe")
                 else:
                     print(f"NOT RUN execution windows/{arch}: cross-built only", flush=True)
                     execution.append({"target": "windows/" + arch, "status": "not-run",
@@ -243,6 +267,7 @@ def main():
         "source_input_status": dirty_inputs.splitlines(),
         "source_inputs": inputs,
         "go_toolchain": actual_go,
+        "toolchain_files": toolchain_files,
         "build_flags": BUILD_FLAGS,
         "build_environment": BUILD_ENV,
         "host": {"os": platform.system(), "architecture": platform.machine(),

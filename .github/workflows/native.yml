@@ -84,11 +84,45 @@ jobs:
         run: |
           python -B scripts/build-native.py --target "${{ matrix.target }}" --source-revision "${{ github.sha }}"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Capture Windows ARM64 probe diagnostics
+        if: always() && matrix.os == 'windows-11-arm'
+        shell: pwsh
+        run: |
+          $probe = Join-Path $env:GITHUB_WORKSPACE "build/native/hash-windows-amd64-probe.exe"
+          $report = Join-Path $env:GITHUB_WORKSPACE "build/native/windows-arm64-diagnostics.txt"
+          $details = @("OS: $([System.Environment]::OSVersion.VersionString)",
+                       "Process architecture: $([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture)",
+                       "OS architecture: $([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)")
+          if (Test-Path $probe) {
+            $details += (Get-FileHash $probe -Algorithm SHA256 | Format-List | Out-String)
+            $details += (& icacls.exe $probe | Out-String)
+            $details += (Get-Item $probe -Stream * | Format-Table | Out-String)
+            $details += (Get-AuthenticodeSignature $probe | Format-List | Out-String)
+          } else {
+            $details += "Probe file absent after completed execution/cleanup."
+          }
+          foreach ($log in @("Microsoft-Windows-Windows Defender/Operational",
+                              "Microsoft-Windows-CodeIntegrity/Operational")) {
+            try {
+              $events = Get-WinEvent -FilterHashtable @{LogName=$log; StartTime=(Get-Date).AddMinutes(-10)} -MaxEvents 100 -ErrorAction Stop
+              $matching = @($events | Where-Object { $_.Message -like "*hash-windows-amd64-probe.exe*" })
+              $details += "${log}: $($matching.Count) matching events."
+              $details += ($matching | Format-List TimeCreated,Id,Message | Out-String)
+            } catch {
+              $details += "${log}: diagnostic query unavailable: $($_.Exception.Message)"
+            }
+          }
+          $details | Set-Content -Encoding utf8 $report
+          Get-Content $report
       - name: Preserve native artifacts and execution provenance
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: native-${{ matrix.os }}
           path: |
             hash/Resources/bin/
             hash/Resources/native-provenance.json
+            build/native/windows-arm64-x64-probe.json
+            build/native/windows-arm64-diagnostics.txt
+            build/native/hash-windows-amd64-probe.exe
           if-no-files-found: error
