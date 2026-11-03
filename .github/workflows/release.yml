@@ -1,7 +1,17 @@
-name: Signed notarized release candidate
+name: Signed notarized release
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Confirm committed package.json version (numeric tag, no automatic bump)'
+        required: true
+        type: string
+      publish:
+        description: 'Publish a NEW version from main after all gates (false = candidate only)'
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -11,9 +21,34 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  preflight:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'miyako/hash'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Confirm committed version and refuse an existing publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          PUBLISH_RELEASE: ${{ inputs.publish }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--preflight --version "$RELEASE_VERSION" --revision "$GITHUB_SHA")
+          if [[ "$PUBLISH_RELEASE" == true ]]; then args+=(--publish); fi
+          python3 scripts/publish-release.py "${args[@]}"
   native:
+    needs: preflight
     uses: ./.github/workflows/native.yml
   component:
+    needs: preflight
     uses: ./.github/workflows/component.yml
   sign:
     if: github.event_name == 'workflow_dispatch' && github.repository == 'miyako/hash'
@@ -22,6 +57,9 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -72,3 +110,41 @@ jobs:
             build/4d/verification.json
             build/4d/executions/
           if-no-files-found: error
+      - name: Validate the exact final public asset set and checksums
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: python3 scripts/publish-release.py --version "$RELEASE_VERSION" --revision "$GITHUB_SHA"
+      - name: Handoff only a fully successful finalized candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-publish-files
+          path: build/publish-files/
+          if-no-files-found: error
+  publish:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'miyako/hash' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.publish
+    needs: [preflight, native, component, sign]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-publish-files
+          path: build/publish-files
+      - name: Revalidate, upload draft, verify exact downloaded bytes, then publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: python3 scripts/publish-release.py --publish --version "$RELEASE_VERSION" --revision "$GITHUB_SHA"
