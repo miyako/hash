@@ -68,8 +68,14 @@ component for empty/abc/binary/Unicode-path and read-failure cases. Subsequent
 runs exposed an engine shutdown failure across 20.8, 21.1 and 21 R4: process signal
 11 after writing successful reports, reproducible even with the standalone
 `tests/compiler/.../ping.4dm` method (no compilation, component, or helper).
-The harness deliberately rejects these runs. This is a **publication blocker**,
-not a passing full run; final versioned release evidence must supersede it.
+The harness deliberately rejects these local runs. A fresh hosted macOS 15 ARM64
+runner with the checksum-pinned 20.8 engine passed source error fixtures,
+diagnostic-free component/host compilation, installed execution, packaging, and
+execution again after extracting the final ZIP. The hostile runtime host is compiled
+at a safe path and then moved: 4D's clang invocation itself cannot compile a source
+path containing literal quotes. This does not relax executable or input-path tests.
+Publication still requires the complete CI workflow, portable evidence upload,
+and native target verification to pass at the exact release source revision.
 
 ## Publication gates
 

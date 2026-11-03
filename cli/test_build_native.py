@@ -3,6 +3,7 @@
 import importlib.util
 from pathlib import Path, PureWindowsPath
 import unittest
+from unittest.mock import Mock, patch
 
 
 SPEC = importlib.util.spec_from_file_location(
@@ -36,6 +37,20 @@ class ProvenanceTests(unittest.TestCase):
         self.assertEqual(builder.BUILD_ENV["CGO_ENABLED"], "0")
         self.assertEqual(builder.BUILD_ENV["GOPROXY"], "off")
         self.assertIn("-buildvcs=false", builder.BUILD_FLAGS)
+
+    def test_windows_access_retry_is_bounded_and_eventually_succeeds(self):
+        operation = Mock(side_effect=[PermissionError("busy"), "passed"])
+        with patch.object(builder.time, "sleep") as sleep, patch("builtins.print"):
+            self.assertEqual(builder.retry_windows_file_access(operation, "probe"), "passed")
+        self.assertEqual(operation.call_count, 2)
+        sleep.assert_called_once_with(0.25)
+
+    def test_windows_access_retry_does_not_hide_permanent_failure(self):
+        operation = Mock(side_effect=PermissionError("denied"))
+        with patch.object(builder.time, "sleep"), patch("builtins.print"):
+            with self.assertRaises(PermissionError):
+                builder.retry_windows_file_access(operation, "probe")
+        self.assertEqual(operation.call_count, 20)
 
 
 if __name__ == "__main__":

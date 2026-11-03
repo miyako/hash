@@ -20,7 +20,9 @@ def run_engine(engine, project, method, config):
                "--user-param", str(parameter), "--dataless", "--skip-onstartup"]
     if engine.name != "tool4d":
         command.append("--headless")
-    execution = project.parent / f"{method}-execution.json"
+    key = hashlib.sha256(str(project).encode("utf-8")).hexdigest()[:12]
+    execution = BUILD / "executions" / f"{method}-{key}.json"
+    execution.parent.mkdir(parents=True, exist_ok=True)
     execution.unlink(missing_ok=True)
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=120)
@@ -149,6 +151,7 @@ def test_installed(engine, component):
                {"report": str(report), "cases": cases,
                 "expectedExecutable": str(installed / "Resources/bin/macOS/hash")})
     result = json.loads(report.read_text())
+    (BUILD / "installed-results.json").write_text(json.dumps(result, indent=2) + "\n")
     if result.get("success") is not True:
         raise RuntimeError(f"Installed host failed: {result}")
     print(f"Installed component fixture passed: {report}")

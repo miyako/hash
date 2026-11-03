@@ -63,8 +63,8 @@ jobs:
             build/4d/*-compile.json
             build/4d/verification.json
             build/4d/source-fixture/source-results.json
-            build/4d/**/Project/*-execution.json
-            build/4d/installed*/installed-results.json
+            build/4d/executions/
+            build/4d/installed-results.json
             hash/Resources/native-provenance.json
             build/release/
           if-no-files-found: error

@@ -17,6 +17,7 @@ from pathlib import Path, PurePath
 import platform
 import subprocess
 import sys
+import time
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -54,6 +55,19 @@ def command(args, *, env=None, timeout=180):
     return subprocess.check_output(
         [str(arg) for arg in args], cwd=ROOT, env=env, timeout=timeout
     ).decode("utf-8").strip()
+
+
+def retry_windows_file_access(operation, description):
+    for attempt in range(20):
+        try:
+            return operation()
+        except PermissionError:
+            if attempt == 19:
+                raise
+            if attempt == 0:
+                print(f"Retrying inaccessible Windows executable: {description}",
+                      file=sys.stderr, flush=True)
+            time.sleep(0.25)
 
 
 def source_inventory():
@@ -194,10 +208,11 @@ def main():
                         try:
                             command(["go", "build", *BUILD_FLAGS, "-o", probe_output, "./cli"],
                                     env=dict(env, GOOS="windows", GOARCH="amd64"))
-                            probe = subprocess.run(
-                                [str(probe_output), "--architecture"],
-                                capture_output=True, timeout=30, cwd=ROOT, check=True,
-                            )
+                            probe = retry_windows_file_access(
+                                lambda: subprocess.run(
+                                    [str(probe_output), "--architecture"],
+                                    capture_output=True, timeout=30, cwd=ROOT, check=True),
+                                "launch x64 architecture probe")
                             if probe.stdout != b"arm64\n" or probe.stderr:
                                 raise RuntimeError("Windows ARM64 x64 probe did not report arm64")
                             windows_arm64_x64_probe = {
@@ -207,7 +222,9 @@ def main():
                             }
                             print("PASS Windows ARM64 x64-emulated --architecture probe: arm64", flush=True)
                         finally:
-                            probe_output.unlink(missing_ok=True)
+                            retry_windows_file_access(
+                                lambda: probe_output.unlink(missing_ok=True),
+                                "remove completed x64 architecture probe")
                 else:
                     print(f"NOT RUN execution windows/{arch}: cross-built only", flush=True)
                     execution.append({"target": "windows/" + arch, "status": "not-run",

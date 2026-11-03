@@ -62,8 +62,7 @@ jobs:
         with:
           name: engine-probe-evidence
           path: |
-            tests/compiler/Project/ping-execution.json
             tests/compiler/Resources/ping.txt
             build/4d/engine-probe-compile.json
-            build/4d/compiler-engine-probe/Project/compile_hash-execution.json
+            build/4d/executions/
           if-no-files-found: error
