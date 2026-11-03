@@ -1,0 +1,70 @@
+name: Component verification
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: component-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  component:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.1'
+          cache: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Provision checksum-pinned 20.8 headless engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          mkdir -p tools/4dcli build/tool-downloads
+          curl -fL --retry 2 --max-time 120 \
+            https://resources-download.4d.com/release/20.x/20.8/latest/mac/tool4d_arm64.tar.xz \
+            -o build/tool-downloads/tool4d-20.8-arm64.tar.xz
+          echo 'da9c977dd85d4ee506a5d0c115f17d9f27ea487f402f0d642f4f2e1b186b560d  build/tool-downloads/tool4d-20.8-arm64.tar.xz' | shasum -a 256 -c -
+          tar -xJf build/tool-downloads/tool4d-20.8-arm64.tar.xz -C tools/4dcli
+          codesign --verify --strict tools/4dcli/tool4d.app
+          tools/4dcli/tool4d.app/Contents/MacOS/tool4d --version
+      - name: Native helper tests and portable build
+        env:
+          GOTOOLCHAIN: local
+          CGO_ENABLED: '0'
+        run: |
+          go test ./cli
+          python3 -m unittest discover -s tests -p 'test_*.py'
+          python3 scripts/build-native.py
+      - name: Actual compilation and installed component execution
+        run: |
+          python3 scripts/test-4d.py --engine "$PWD/tools/4dcli/tool4d.app/Contents/MacOS/tool4d"
+          python3 scripts/package-release.py
+          mkdir -p build/extracted
+          ditto -x -k build/release/hash.zip build/extracted
+          python3 scripts/test-4d.py --engine "$PWD/tools/4dcli/tool4d.app/Contents/MacOS/tool4d" \
+            --component "$PWD/build/extracted/hash.4dbase"
+      - name: Preserve verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: component-verification
+          path: |
+            build/4d/*-compile.json
+            build/4d/verification.json
+            build/4d/source-fixture/source-results.json
+            build/4d/**/Project/*-execution.json
+            build/4d/installed*/installed-results.json
+            hash/Resources/native-provenance.json
+            build/release/
+          if-no-files-found: error

@@ -1,0 +1,69 @@
+name: Headless engine probe
+
+on:
+  push:
+    paths:
+      - '.github/workflows/engine.yml'
+      - 'hash/Project/**'
+      - 'tests/compiler/**'
+      - 'scripts/test-4d.py'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  engine:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Provision pinned 20.8 engine
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          mkdir -p tools/4dcli build/tool-downloads
+          curl -fL --retry 2 --max-time 120 \
+            https://resources-download.4d.com/release/20.x/20.8/latest/mac/tool4d_arm64.tar.xz \
+            -o build/tool-downloads/tool4d-20.8-arm64.tar.xz
+          echo 'da9c977dd85d4ee506a5d0c115f17d9f27ea487f402f0d642f4f2e1b186b560d  build/tool-downloads/tool4d-20.8-arm64.tar.xz' | shasum -a 256 -c -
+          tar -xJf build/tool-downloads/tool4d-20.8-arm64.tar.xz -C tools/4dcli
+          codesign --verify --strict tools/4dcli/tool4d.app
+          tools/4dcli/tool4d.app/Contents/MacOS/tool4d --version
+      - name: Minimal startup and shutdown
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import runpy
+          harness = runpy.run_path("scripts/test-4d.py")
+          root = Path.cwd()
+          ping = root / "tests/compiler/Resources/ping.txt"
+          ping.unlink(missing_ok=True)
+          harness["run_engine"](root / "tools/4dcli/tool4d.app/Contents/MacOS/tool4d",
+                                root / "tests/compiler/Project/compiler.4DProject", "ping", {})
+          assert ping.read_text(encoding="utf-8-sig") == "pong"
+          PY
+      - name: Actual diagnostic-free compilation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import runpy
+          harness = runpy.run_path("scripts/test-4d.py")
+          root = Path.cwd()
+          harness["BUILD"].mkdir(parents=True, exist_ok=True)
+          harness["compile_project"](root / "tools/4dcli/tool4d.app/Contents/MacOS/tool4d",
+                                     root / "hash/Project/hash.4DProject", "engine-probe")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: engine-probe-evidence
+          path: |
+            tests/compiler/Project/ping-execution.json
+            tests/compiler/Resources/ping.txt
+            build/4d/engine-probe-compile.json
+            build/4d/compiler-engine-probe/Project/compile_hash-execution.json
+          if-no-files-found: error

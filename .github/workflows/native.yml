@@ -1,0 +1,101 @@
+name: Native helper build and test
+
+on:
+  push:
+    paths:
+      - cli/**
+      - go.mod
+      - LICENSE
+      - scripts/build-native.py
+      - hash/Resources/licenses/Go-LICENSE.txt
+      - .github/workflows/native.yml
+  pull_request:
+    paths:
+      - cli/**
+      - go.mod
+      - LICENSE
+      - scripts/build-native.py
+      - hash/Resources/licenses/Go-LICENSE.txt
+      - .github/workflows/native.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            target: macos
+            goos: darwin
+            goarch: amd64
+          - os: macos-15
+            target: macos
+            goos: darwin
+            goarch: arm64
+          - os: windows-2025
+            target: windows
+            goos: windows
+            goarch: amd64
+          - os: windows-11-arm
+            target: windows-arm64
+            goos: windows
+            goarch: arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      GOTOOLCHAIN: local
+      CGO_ENABLED: "0"
+      GOPROXY: "off"
+      GOSUMDB: "off"
+      GOWORK: "off"
+      GOENV: "off"
+      GOFLAGS: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.1"
+          cache: false
+      - name: Configure repository-local scratch space
+        shell: pwsh
+        run: |
+          $scratch = Join-Path $env:GITHUB_WORKSPACE "build/native-test"
+          New-Item -ItemType Directory -Force $scratch | Out-Null
+          "TMPDIR=$scratch" >> $env:GITHUB_ENV
+          "TMP=$scratch" >> $env:GITHUB_ENV
+          "TEMP=$scratch" >> $env:GITHUB_ENV
+          "GOTMPDIR=$scratch" >> $env:GITHUB_ENV
+          "GOCACHE=$(Join-Path $env:GITHUB_WORKSPACE 'build/go-cache')" >> $env:GITHUB_ENV
+      - name: Verify native toolchain and run bounded offline tests
+        shell: pwsh
+        run: |
+          go version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $goos = go env GOOS
+          $goarch = go env GOARCH
+          if ($goos -ne "${{ matrix.goos }}" -or $goarch -ne "${{ matrix.goarch }}") {
+            throw "Toolchain is not native: $goos/$goarch"
+          }
+          go test -count=1 -timeout=90s -v ./cli
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go vet ./cli
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -B -m unittest discover -s cli -p "test_*.py" -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build and execute actual native CLI
+        shell: pwsh
+        run: |
+          python -B scripts/build-native.py --target "${{ matrix.target }}" --source-revision "${{ github.sha }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Preserve native artifacts and execution provenance
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.os }}
+          path: |
+            hash/Resources/bin/
+            hash/Resources/native-provenance.json
+          if-no-files-found: error
