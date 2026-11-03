@@ -5,12 +5,16 @@ on:
   pull_request:
   workflow_dispatch:
   workflow_call:
+    inputs:
+      source-revision:
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: component-${{ github.workflow }}-${{ github.ref }}
+  group: component-${{ github.workflow }}-${{ github.ref }}-${{ inputs.source-revision || 'validation' }}
   cancel-in-progress: true
 
 jobs:
@@ -19,6 +23,21 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        if: inputs.source-revision != ''
+        with:
+          name: release-source
+          path: build/release-source
+      - name: Check out the exact prepared source
+        if: inputs.source-revision != ''
+        env:
+          SOURCE_REVISION: ${{ inputs.source-revision }}
+        run: |
+          git fetch build/release-source/source.bundle refs/heads/release-prepared
+          git checkout --detach "$SOURCE_REVISION"
+          test "$(git rev-parse HEAD)" = "$SOURCE_REVISION"
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25.1'
@@ -44,7 +63,7 @@ jobs:
           GOTOOLCHAIN: local
           CGO_ENABLED: '0'
         run: |
-          go test ./cli
+          go test ./...
           python3 -m unittest discover -s tests -p 'test_*.py'
           python3 scripts/build-native.py
       - name: Actual compilation and installed component execution
@@ -60,6 +79,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: component-verification
+          overwrite: true
           path: |
             build/4d/*-compile.json
             build/4d/verification.json

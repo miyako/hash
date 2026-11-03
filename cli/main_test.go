@@ -153,8 +153,11 @@ func TestArguments(t *testing.T) {
 		if run(args, nil, &out, &stderr) != 0 || out.Len() == 0 || stderr.Len() != 0 {
 			t.Fatalf("arguments %v failed", args)
 		}
-		if args[0] == "--version" && out.String() != "20.0.1\n" {
+		if args[0] == "--version" && out.String() != version+"\n" {
 			t.Fatal(out.String())
+		}
+		if (args[0] == "--help" || args[0] == "-h") && !strings.HasPrefix(out.String(), "hash "+version+"\n") {
+			t.Fatalf("help banner does not match version: %q", out.String())
 		}
 		if args[0] == "--architecture" {
 			want, err := hostArchitecture()

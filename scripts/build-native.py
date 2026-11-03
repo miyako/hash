@@ -23,7 +23,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 RESOURCES = ROOT / "hash" / "Resources"
 GO_VERSION = "go1.25.1"
-VERSION = "20.0.1"
+VERSION = json.loads((ROOT / "package.json").read_text())["version"]
 BUILD_FLAGS = ["-trimpath", "-buildvcs=false", "-mod=readonly", "-ldflags=-s -w -buildid="]
 BUILD_ENV = {
     "GOTOOLCHAIN": "local",
@@ -73,6 +73,9 @@ def retry_windows_file_access(operation, description):
 def source_inventory():
     paths = [
         ROOT / "go.mod",
+        ROOT / "version.go",
+        ROOT / "version_test.go",
+        ROOT / "package.json",
         ROOT / "LICENSE",
         ROOT / "scripts" / "build-native.py",
         ROOT / ".github" / "workflows" / "native.yml",
@@ -87,8 +90,9 @@ def smoke(binary: Path, prefix, target: str, fixture: Path):
     invocation = [*prefix, str(binary)]
     if command([*invocation, "--version"], timeout=30) != VERSION:
         raise RuntimeError(f"{target}: unexpected CLI version")
-    if "Usage: hash" not in command([*invocation, "--help"], timeout=30):
-        raise RuntimeError(f"{target}: missing CLI help")
+    help_text = command([*invocation, "--help"], timeout=30)
+    if not help_text.startswith(f"hash {VERSION}\nUsage: hash"):
+        raise RuntimeError(f"{target}: missing or incorrectly versioned CLI help")
     expected_arch = target.split()[0].split("/")[-1]
     if expected_arch == "x86_64":
         expected_arch = "amd64"

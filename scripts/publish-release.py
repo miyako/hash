@@ -65,15 +65,7 @@ def release_identity(root, version, revision):
     if not re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version):
         raise RuntimeError("Version must be a numeric major.minor.patch without a tag prefix")
     if json.loads((root / "package.json").read_text())["version"] != version:
-        raise RuntimeError("Requested version differs from committed package.json; bump explicitly first")
-    pinned_versions = (
-        (root / "scripts/build-native.py", r'^VERSION = "([^"]+)"$'),
-        (root / "cli/main.go", r'^const version = "([^"]+)"$'),
-        (root / "cli/main.go", r"^const usage = `hash ([^\n]+)$"),
-    )
-    for path, pattern in pinned_versions:
-        if re.findall(pattern, path.read_text(), re.MULTILINE) != [version]:
-            raise RuntimeError(f"Version pin in {path.relative_to(root)} differs from package.json")
+        raise RuntimeError("Requested version differs from committed package.json")
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
         raise RuntimeError("Release source must be a full immutable commit SHA")
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
@@ -81,7 +73,7 @@ def release_identity(root, version, revision):
         "git", "status", "--porcelain", "--untracked-files=normal",
     ], cwd=root, text=True).strip()
     if head != revision or dirty:
-        raise RuntimeError("Release requires a clean checkout of the exact dispatch SHA")
+        raise RuntimeError("Release requires a clean checkout of the exact prepared SHA")
     return version
 
 
@@ -193,10 +185,35 @@ def require_tag(api, tag, revision):
         raise RuntimeError("Release tag does not point directly to the exact tested commit")
 
 
-def publish(api, tag, revision, assets, run_id, attempt):
+def persist_version(api, root, base, revision):
+    if not re.fullmatch(r"[0-9a-f]{40}", base):
+        raise RuntimeError("Publication requires a full immutable base SHA")
+    parents = subprocess.check_output(
+        ["git", "rev-list", "--parents", "-n", "1", revision], cwd=root, text=True).split()
+    changed = subprocess.check_output(
+        ["git", "diff", "--name-only", base, revision], cwd=root, text=True).splitlines()
+    if parents != [revision, base] or changed != ["package.json"]:
+        raise RuntimeError("Prepared commit must change only package.json directly on the dispatch base")
+    remote = api.request("GET", f"repos/{REPOSITORY}/git/ref/heads/main")
+    if remote["object"]["sha"] != base:
+        raise RuntimeError("main moved during release; start a new dispatch, never rebase tested bytes")
+    # This lease is a compare-and-swap, not permission to rewrite history: the
+    # checked commit is exactly one child of base. Branch protection still applies.
+    subprocess.run([
+        "git", "push", "--porcelain", f"--force-with-lease=refs/heads/main:{base}",
+        "origin", f"{revision}:refs/heads/main",
+    ], cwd=root, check=True, timeout=120)
+    persisted = api.request("GET", f"repos/{REPOSITORY}/git/ref/heads/main")
+    if persisted["object"]["sha"] != revision:
+        raise RuntimeError("main changed after persisting the tested version commit")
+
+
+def publish(api, tag, revision, assets, run_id, attempt, persist=None):
     if not re.fullmatch(r"[1-9][0-9]*", run_id) or not re.fullmatch(r"[1-9][0-9]*", attempt):
         raise RuntimeError("Publication requires a valid Actions run ID and attempt")
     require_unused(api, tag)
+    if persist is not None:
+        persist()
     run_url = f"https://github.com/{REPOSITORY}/actions/runs/{run_id}/attempts/{attempt}"
     notes = (
         f"hash {tag}: signed and notarized component and standalone macOS CLI.\n\n"
@@ -241,6 +258,7 @@ def main():
     parser.add_argument("--revision", required=True)
     parser.add_argument("--preflight", action="store_true")
     parser.add_argument("--publish", action="store_true")
+    parser.add_argument("--base-revision", help="dispatch parent of the prepared version commit")
     parser.add_argument("--input", type=Path, default=ROOT / "build/publish-files")
     args = parser.parse_args()
     require_context(args.publish)
@@ -249,12 +267,15 @@ def main():
     if args.preflight:
         if args.publish:
             require_unused(api, tag)
-        print(f"Confirmed version/tag {tag} at {args.revision}; no version bump performed")
+        print(f"Confirmed prepared version/tag {tag} at {args.revision}")
         return
     assets = validate_assets(args.input, args.version, args.revision)
     if args.publish:
+        if not args.base_revision:
+            raise RuntimeError("Publication requires the prepared commit's --base-revision")
         result = publish(api, tag, args.revision, assets,
-                         os.environ.get("GITHUB_RUN_ID", ""), os.environ.get("GITHUB_RUN_ATTEMPT", ""))
+                         os.environ.get("GITHUB_RUN_ID", ""), os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+                         persist=lambda: persist_version(api, ROOT, args.base_revision, args.revision))
         with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a") as summary:
             summary.write(f"Published [{tag}]({result['html_url']}) from `{args.revision}`.\n")
     else:

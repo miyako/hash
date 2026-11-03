@@ -37,7 +37,10 @@ callers must prevent concurrent changes when a stable-file guarantee is required
 
 ## Installation
 
-The initial intended version is **20.0.1**. A release must pass the native and 4D
+Manual releases offer a **patch / minor / major** selector and prepare the version
+automatically from `package.json`; leave `publish` off for a candidate without
+remote version changes. See [the release interface](docs/BUILD.md#manual-release-interface).
+A release must pass the native and 4D
 gates described in [BUILD.md](docs/BUILD.md) before publication. Do not treat a
 source tag or an archive's existence as proof of a released, verified component.
 Release publication additionally requires Developer ID signatures and accepted
