@@ -54,7 +54,9 @@ def prepare(root, base, increment, run_id, bundle):
                GIT_COMMITTER_EMAIL="41898282+github-actions[bot]@users.noreply.github.com",
                GIT_AUTHOR_DATE=timestamp, GIT_COMMITTER_DATE=timestamp)
     revision = git(root, "-c", "commit.gpgsign=false", "commit-tree", tree, "-p", base,
-                   "-m", f"Release {version} ({increment}; Actions run {run_id})", env=env)
+                   "-m", f"Release {version} ({increment}; Actions run {run_id})",
+                   "-m", "Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>",
+                   env=env)
     git(root, "checkout", "--detach", revision)
     publisher.release_identity(root, version, revision)
     git(root, "update-ref", "refs/heads/release-prepared", revision)

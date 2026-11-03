@@ -64,6 +64,9 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual(self.git("status", "--porcelain"), "")
         self.assertEqual(self.git("rev-parse", "HEAD^"), self.base)
         self.assertEqual(self.git("diff", "--name-only", self.base, revision), "package.json")
+        self.assertIn(
+            "Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>",
+            self.git("show", "-s", "--format=%B", revision))
         clone = Path(self.temp.name) / "consumer"
         self.git("clone", "--quiet", "--branch", "release-prepared", str(self.bundle), str(clone))
         self.assertEqual(self.git("rev-parse", "HEAD", root=clone), revision)
