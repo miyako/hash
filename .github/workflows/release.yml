@@ -3,10 +3,15 @@ name: Signed notarized release
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Confirm committed package.json version (numeric tag, no automatic bump)'
+      increment:
+        description: 'Bump package.json from the selected branch (patch / minor / major)'
         required: true
-        type: string
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
       publish:
         description: 'Publish a NEW version from main after all gates (false = candidate only)'
         required: true
@@ -25,34 +30,50 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && github.repository == 'miyako/hash'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      version: ${{ steps.prepare.outputs.version }}
+      revision: ${{ steps.prepare.outputs.revision }}
+      base: ${{ steps.prepare.outputs.base }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Confirm committed version and refuse an existing publication
+      - name: Prepare immutable version commit and refuse an existing version
+        id: prepare
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ inputs.version }}
+          INCREMENT: ${{ inputs.increment }}
           PUBLISH_RELEASE: ${{ inputs.publish }}
         shell: bash
         run: |
           set -euo pipefail
-          args=(--preflight --version "$RELEASE_VERSION" --revision "$GITHUB_SHA")
+          args=(--increment "$INCREMENT" --base "$GITHUB_SHA")
           if [[ "$PUBLISH_RELEASE" == true ]]; then args+=(--publish); fi
-          python3 scripts/publish-release.py "${args[@]}"
+          python3 scripts/prepare-release.py "${args[@]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-source
+          path: build/release-source/source.bundle
+          if-no-files-found: error
+          overwrite: true
   native:
     needs: preflight
     uses: ./.github/workflows/native.yml
+    with:
+      source-revision: ${{ needs.preflight.outputs.revision }}
   component:
     needs: preflight
     uses: ./.github/workflows/component.yml
+    with:
+      source-revision: ${{ needs.preflight.outputs.revision }}
   sign:
     if: github.event_name == 'workflow_dispatch' && github.repository == 'miyako/hash'
-    needs: [native, component]
+    needs: [preflight, native, component]
     runs-on: macos-15
     timeout-minutes: 90
     steps:
@@ -60,6 +81,17 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-source
+          path: build/release-source
+      - name: Check out the exact prepared source
+        env:
+          SOURCE_REVISION: ${{ needs.preflight.outputs.revision }}
+        run: |
+          git fetch build/release-source/source.bundle refs/heads/release-prepared
+          git checkout --detach "$SOURCE_REVISION"
+          test "$(git rev-parse HEAD)" = "$SOURCE_REVISION"
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -103,6 +135,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: signed-release-candidate
+          overwrite: true
           path: |
             build/publish-files/
             build/signed-release/
@@ -112,12 +145,14 @@ jobs:
           if-no-files-found: error
       - name: Validate the exact final public asset set and checksums
         env:
-          RELEASE_VERSION: ${{ inputs.version }}
-        run: python3 scripts/publish-release.py --version "$RELEASE_VERSION" --revision "$GITHUB_SHA"
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+          SOURCE_REVISION: ${{ needs.preflight.outputs.revision }}
+        run: python3 scripts/publish-release.py --version "$RELEASE_VERSION" --revision "$SOURCE_REVISION"
       - name: Handoff only a fully successful finalized candidate
         uses: actions/upload-artifact@v4
         with:
           name: release-publish-files
+          overwrite: true
           path: build/publish-files/
           if-no-files-found: error
   publish:
@@ -135,7 +170,18 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
-          persist-credentials: false
+          persist-credentials: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-source
+          path: build/release-source
+      - name: Check out the exact prepared source
+        env:
+          SOURCE_REVISION: ${{ needs.preflight.outputs.revision }}
+        run: |
+          git fetch build/release-source/source.bundle refs/heads/release-prepared
+          git checkout --detach "$SOURCE_REVISION"
+          test "$(git rev-parse HEAD)" = "$SOURCE_REVISION"
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -146,5 +192,7 @@ jobs:
       - name: Revalidate, upload draft, verify exact downloaded bytes, then publish
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_VERSION: ${{ inputs.version }}
-        run: python3 scripts/publish-release.py --publish --version "$RELEASE_VERSION" --revision "$GITHUB_SHA"
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+          SOURCE_REVISION: ${{ needs.preflight.outputs.revision }}
+          BASE_REVISION: ${{ needs.preflight.outputs.base }}
+        run: python3 scripts/publish-release.py --publish --version "$RELEASE_VERSION" --revision "$SOURCE_REVISION" --base-revision "$BASE_REVISION"

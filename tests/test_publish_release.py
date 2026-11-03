@@ -328,6 +328,29 @@ class PublicationTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "already exists"):
             self.publish()
 
+    def test_version_persistence_happens_after_slot_check_before_draft(self):
+        calls = []
+
+        def persist():
+            calls.append("persist")
+            self.assertTrue(all(call[0] == "GET" for call in self.api.calls))
+
+        PUBLISH.publish(self.api, VERSION, REVISION, self.assets, "1234", "2", persist=persist)
+        self.assertEqual(calls, ["persist"])
+        self.api = FakeGitHub()
+        self.api.tag = {"object": {"type": "commit", "sha": REVISION}}
+        with self.assertRaisesRegex(RuntimeError, "already exists"):
+            PUBLISH.publish(self.api, VERSION, REVISION, self.assets, "1234", "2", persist=persist)
+        self.assertEqual(calls, ["persist"])
+
+    def test_persistence_failure_prevents_draft_or_tag(self):
+        def fail():
+            raise RuntimeError("Branch protection denied version push")
+
+        with self.assertRaisesRegex(RuntimeError, "Branch protection"):
+            PUBLISH.publish(self.api, VERSION, REVISION, self.assets, "1234", "2", persist=fail)
+        self.assertTrue(all(call[0] == "GET" for call in self.api.calls))
+
 
 class IdentityAndTransportTests(unittest.TestCase):
     def version_fixture(self, root):
@@ -366,7 +389,7 @@ class IdentityAndTransportTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, "clean checkout"):
                         PUBLISH.release_identity(root, VERSION, REVISION)
 
-    def test_real_git_checkout_and_version_pin_mismatches(self):
+    def test_real_git_checkout_and_source_changes(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             self.version_fixture(root)
@@ -380,7 +403,7 @@ class IdentityAndTransportTests(unittest.TestCase):
                 "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "Version fixture")
             revision = git("rev-parse", "HEAD")
             self.assertEqual(PUBLISH.release_identity(root, VERSION, revision), VERSION)
-            with self.assertRaisesRegex(RuntimeError, "exact dispatch SHA"):
+            with self.assertRaisesRegex(RuntimeError, "exact prepared SHA"):
                 PUBLISH.release_identity(root, VERSION, "b" * 40)
             (root / "untracked").write_text("dirty source")
             with self.assertRaisesRegex(RuntimeError, "clean checkout"):
@@ -390,7 +413,7 @@ class IdentityAndTransportTests(unittest.TestCase):
                 path = root / name
                 original = path.read_text()
                 path.write_text(original.replace(VERSION, "20.0.3"))
-                with self.subTest(name=name), self.assertRaisesRegex(RuntimeError, "Version pin"):
+                with self.subTest(name=name), self.assertRaisesRegex(RuntimeError, "clean checkout"):
                     PUBLISH.release_identity(root, VERSION, revision)
                 path.write_text(original)
 
@@ -436,7 +459,9 @@ class WorkflowGates(unittest.TestCase):
         self.assertNotIn("signed-release-candidate", publish)
         self.assertNotIn("run-id:", publish)
         self.assertIn("ref: ${{ github.sha }}", publish)
-        self.assertIn("persist-credentials: false", publish)
+        self.assertIn("persist-credentials: true", publish)
+        self.assertIn('--revision "$SOURCE_REVISION" --base-revision "$BASE_REVISION"', publish)
+        self.assertIn("git checkout --detach", publish)
         for gate in ("verify-release-inputs.py", "sign-release.py --input",
                      "scripts/test-4d.py", "scripts/finalize-release.py"):
             self.assertIn(gate, sign)

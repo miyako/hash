@@ -10,13 +10,16 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	hashversion "github.com/miyako/hash"
 )
 
-const version = "20.0.1"
+var version = hashversion.Version()
+
 const maxRequestBytes = 1 << 20
 const bufferBytes = 32 << 10
 
-const usage = `hash 20.0.1
+var usage = "hash " + version + `
 Usage: hash [--version | --architecture | --help]
 --architecture prints arm64 or amd64 (Windows x64 detects ARM64 hosts).
 Without arguments, read one JSON object {"path":"..."} from stdin (maximum 1 MiB).

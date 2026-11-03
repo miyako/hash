@@ -12,7 +12,7 @@ process-local handler. Same-project constructor-failure fixtures deliberately st
 inside a copy of the owning component; no class inherits across component boundaries.
 
 ```sh
-GOTOOLCHAIN=local CGO_ENABLED=0 go test ./cli
+GOTOOLCHAIN=local CGO_ENABLED=0 go test ./...
 python3 scripts/build-native.py
 python3 scripts/test-4d.py --engine /absolute/path/to/tool4d
 python3 scripts/package-release.py
@@ -90,8 +90,8 @@ verification, matching native source revision, and a clean source tree.
 Its native checksums describe bytes after local ad-hoc signing but before
 Developer ID signing. Keep these records separate from final distribution hashes.
 
-Run the manually dispatched **Signed notarized release** workflow at
-the exact committed revision. It calls both native and component workflows in
+Run the manually dispatched **Signed notarized release** workflow from a
+reviewed branch. It prepares one immutable version commit, then calls both native and component workflows in
 the same run, checks every native execution receipt against the bundled bytes,
 and requires diagnostic-free real compilation and installed execution. Only its
 trusted dispatch signing job receives these six repository secrets:
@@ -137,54 +137,80 @@ can legitimately produce different bytes.
 
 ### Manual release interface
 
-The workflow never bumps versions or pushes a source commit. Its required
-`version` input must equal the committed `package.json` version, in numeric
-`major.minor.patch` form. The tag is **exactly that version**, without a `v` or
-`release` prefix, matching the existing `20.0.1` release. That existing release,
-tag and all its assets are never changed. Publishing `20.0.1` again is intentionally
-rejected, even if its source differs.
+Choose `increment`: **patch** (default), **minor**, or **major**. No version typing
+or hand-editing of pins is needed. `package.json` is the authoritative numeric
+`major.minor.patch` source; the Go CLI embeds that manifest (including its help
+banner), and the native builder reads it directly. Minor resets patch; major
+resets minor and patch. Prerelease/build-metadata versions are rejected.
 
-Before a new publication, choose the next version explicitly and commit matching
-values in `package.json`, `scripts/build-native.py` (`VERSION`), `cli/main.go`
-(`version` and the help banner), and the `--version` expectation in
-`cli/main_test.go`. Preflight rejects mismatched production version pins; the
-normal CLI tests check the expected output. Versioned test fixtures describing
-old sample releases need not be bumped. Merge the reviewed source/version changes
-to `main` before publishing. This workflow implementation does not itself choose
-or authorize a next version.
+The starting version is the manifest in the **dispatch commit**, not the latest
+release or a later branch HEAD. The already committed package-only **20.0.2**
+edit is preserved as the baseline, not interpreted as an unpublished reservation
+or silently changed back to 20.0.1: patch prepares **20.0.3**, minor **20.1.0**,
+major **21.0.0**. It does not publish 20.0.2 unchanged. The tag is exactly the
+prepared numeric version, with no `v` prefix. Existing tags, public releases and
+drafts (including 20.0.1) are never changed; any collision fails, rather than
+silently choosing another version.
+
+Preflight creates one clean local commit, changing only `package.json`, directly
+on the dispatch SHA. Its identity and timestamp are deterministic for the run,
+so rerunning preparation does not bump twice or produce a different source SHA.
+A full Git bundle is handed to every native runner, the component job, signing
+and publication through the same run's `release-source` artifact. Each consumer
+checks out the prepared SHA before executing tests/build scripts. All CLI output,
+source inventories, compilation/runtime receipts, provenance, assets and the
+eventual tag identify that SHA, **not** `github.sha` (the dispatch parent).
+The run summary records both revisions and the version transition.
+
+The read-only **Prepared release source validation** PR workflow exercises this
+same preparation, bundle artifact and reusable four-host/component workflow
+handoff on a local patch commit. It never calls release APIs, persists a source
+ref or runs signing/publication. This is separate from the manual production
+workflow, whose signing and publication jobs still exclude PR events.
 
 In GitHub's **Actions** tab, select **Signed notarized release**, then **Run
-workflow**. For publication, select branch **main**, enter the exact committed
-version and enable **Publish a NEW version from main after all gates**. For a
+workflow**. For publication, select branch **main**, choose the increment and
+enable **Publish a NEW version from main after all gates**. For a
 candidate-only rehearsal, leave that checkbox off (the default); feature branches
-are allowed for candidates. Candidate runs can use an already released version
-because they create no remote tag/release. The workflow must exist on the default
+are allowed for candidates, but tags are not dispatch sources. Candidates prepare
+the same bump and check version availability, but push no commit, branch or tag
+and create no GitHub release or draft. The workflow must exist on the default
 branch before GitHub exposes manual dispatch in the UI.
 
 Equivalent commands, after checking out the intended reviewed source locally:
 
 ```sh
-VERSION=$(python3 -c 'import json; print(json.load(open("package.json"))["version"])')
 # Candidate only; --ref may instead name the feature branch being rehearsed.
 gh workflow run release.yml --repo miyako/hash --ref main \
-  -f version="$VERSION" -F publish=false
-# Deliberate NEW public release, only after an explicit version-bump commit on main.
+  -f increment=patch -F publish=false
+# Deliberate NEW public release of reviewed main, only after all gates.
 gh workflow run release.yml --repo miyako/hash --ref main \
-  -f version="$VERSION" -F publish=true
+  -f increment=patch -F publish=true
 gh run list --repo miyako/hash --workflow release.yml --limit 5
 ```
 
 These are dispatch instructions, not a request to publish the current version.
-The source is the immutable Actions dispatch SHA, not whichever commit happens
-to be `main` HEAD later. Both reusable build workflows and signing use that same
-source snapshot. The workflow accepts only manual dispatch in `miyako/hash`;
+The source is the prepared immutable commit, never a moving branch. Publication
+requires `main` still equal the dispatch parent both at preflight and after
+all signing/runtime gates. If `main` advances, start a new dispatch: never rebase
+already tested artifacts onto different source. The workflow accepts only manual dispatch in `miyako/hash`;
 publications additionally require `refs/heads/main`. PRs and forks cannot publish.
 The existing six Apple secrets above are sufficient; no new secret or personal
 access token is needed. All build, preflight and signing jobs have `contents: read`;
-only the final publication job receives the built-in token's `contents: write`.
+only the final publication job receives the built-in token's `contents: write`
+and persisted checkout credentials for the guarded fast-forward version push.
+Branch protection/rulesets must permit that token to push this commit to `main`
+and create a version tag; required PRs or other restrictions can block it. No
+PAT, bypass, force rewrite or protection change is provided.
 One repository-wide `signed-release` concurrency group serializes candidates and
 publications without cancelling an in-progress run. Pending Actions runs can
 still be superseded by newer pending runs; this is not an unlimited release queue.
+Queued publication dispatches from a now-stale `main` fail rather than consuming
+an unexpected version. Full reruns reproduce the same prepared commit and
+replace same-run artifacts; partial reruns use the original outputs/bundle.
+Once publication has persisted the version commit, rerunning that publication
+fails its old-parent check (or an existing-object guard), never bumps again or
+resumes remote objects. Start a new dispatch for a new increment.
 
 ### Publication, outputs and failure handling
 
@@ -209,7 +235,12 @@ The public asset contract is:
 | `signed-host-compile.json`, `signed-runtime-verification.json` | Diagnostic-free real-4D signed-component execution |
 | `notary-hash.zip.json`, `notary-hash.dmg.json`, `notary-hash-cli-macOS.zip.json`, `notary-hash-cli-macOS.dmg.json` | Four Accepted notarization logs |
 
-The publisher creates a **new draft**, uploads all 15 assets without replacement,
+After validating all final assets and refusing existing remote objects, the
+publisher persists the tested version commit to `main` using an exact-parent
+compare-and-swap lease. It independently verifies that the commit is one child
+of the dispatch base and changes only `package.json`; the push is fast-forward
+only by construction. A concurrent branch update or denied write fails closed.
+Only after this post-gate push does it create a **new draft**, uploading all 15 assets without replacement,
 checks the remote asset set, uploaded state and sizes, and downloads each asset
 through the authenticated API to compare its exact bytes with the validated
 candidate. Only then does it create a lightweight version tag at the tested SHA
@@ -219,12 +250,16 @@ It rechecks the tag, public release and all downloaded public asset bytes afterw
 The successful run summary links the release. Candidate-only runs stop after
 validation and artifact upload without any remote mutation.
 
-No signing or runtime failure can reach publication, and no unsigned fallback is
+No signing or runtime failure can persist a version or reach publication, and no unsigned fallback is
 provided. An existing tag, public release **or draft** blocks publication; tags,
 releases and assets are never overwritten, resumed, force-pushed or deleted.
 API/authentication errors other than an explicit missing-ref 404 fail closed.
-Upload, checksum, download or pre-publication API failures leave an unpublished
-draft for inspection, not a partial public release. A failure/cancellation after
+Failures after the version push can consume the version on `main` without a
+release; it is not rolled back. The next fresh dispatch increments that persisted
+baseline. Draft uploads and exact-byte verification precede tag creation, so the
+branch push and tag are deliberately separate operations. Upload, checksum,
+download or pre-publication API failures can leave an unpublished draft for
+inspection, not a partial public release. A failure/cancellation after
 tag creation may also leave a tag; after the final public-state transition it may
 leave a complete public release even if the post-publication verification fails.
 Inspect the run, draft/tag and downloaded evidence before any explicit operator

@@ -6,12 +6,18 @@ on:
     paths:
       - cli/**
       - go.mod
+      - version.go
+      - package.json
       - LICENSE
       - scripts/build-native.py
       - hash/Resources/licenses/Go-LICENSE.txt
       - .github/workflows/native.yml
   workflow_dispatch:
   workflow_call:
+    inputs:
+      source-revision:
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -50,6 +56,22 @@ jobs:
       GOFLAGS: ""
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        if: inputs.source-revision != ''
+        with:
+          name: release-source
+          path: build/release-source
+      - name: Check out the exact prepared source
+        if: inputs.source-revision != ''
+        shell: bash
+        env:
+          SOURCE_REVISION: ${{ inputs.source-revision }}
+        run: |
+          git fetch build/release-source/source.bundle refs/heads/release-prepared
+          git checkout --detach "$SOURCE_REVISION"
+          test "$(git rev-parse HEAD)" = "$SOURCE_REVISION"
       - uses: actions/setup-go@v6
         with:
           go-version: "1.25.1"
@@ -74,16 +96,16 @@ jobs:
           if ($goos -ne "${{ matrix.goos }}" -or $goarch -ne "${{ matrix.goarch }}") {
             throw "Toolchain is not native: $goos/$goarch"
           }
-          go test -count=1 -timeout=90s -v ./cli
+          go test -count=1 -timeout=90s -v ./...
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          go vet ./cli
+          go vet ./...
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -B -m unittest discover -s cli -p "test_*.py" -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build and execute actual native CLI
         shell: pwsh
         run: |
-          python -B scripts/build-native.py --target "${{ matrix.target }}" --source-revision "${{ github.sha }}"
+          python -B scripts/build-native.py --target "${{ matrix.target }}"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Capture Windows ARM64 probe diagnostics
         if: always() && matrix.os == 'windows-11-arm'
@@ -120,6 +142,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: native-${{ matrix.os }}
+          overwrite: true
           path: |
             hash/Resources/bin/
             hash/Resources/native-provenance.json

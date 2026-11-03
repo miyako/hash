@@ -22,11 +22,13 @@ class ProvenanceTests(unittest.TestCase):
     def test_inventory_is_only_cli_and_build_inputs(self):
         inventory = builder.source_inventory()
         self.assertIn("go.mod", inventory)
+        self.assertIn("package.json", inventory)
+        self.assertIn("version.go", inventory)
         self.assertIn("scripts/build-native.py", inventory)
         self.assertIn("cli/main.go", inventory)
         self.assertTrue(all(
             path.startswith("cli/") or path in {
-                "go.mod", "LICENSE", "scripts/build-native.py",
+                "go.mod", "version.go", "version_test.go", "package.json", "LICENSE", "scripts/build-native.py",
                 ".github/workflows/native.yml", "hash/Resources/licenses/Go-LICENSE.txt",
             } for path in inventory
         ))
