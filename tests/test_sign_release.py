@@ -491,6 +491,155 @@ class SigningTests(unittest.TestCase):
                 SIGN.sign_release(self.source, self.output, SECRETS, 60)
         self.assertFalse((self.output / "provenance.json").exists())
 
+    def fail_cli_staples(self, failures):
+        original = self.fake_run
+        pending = iter(failures)
+        attempts = []
+
+        def flaky(command, **kwargs):
+            if (command[1:3] == ["stapler", "staple"]
+                    and command[-1].endswith("hash-cli-macOS.dmg")):
+                attempts.append((command[-1], SIGN.sha256(Path(command[-1])), kwargs["timeout"]))
+                failure = next(pending, None)
+                if failure:
+                    self.commands.append((command, kwargs))
+                    return subprocess.CompletedProcess(command, *failure)
+            return original(command, **kwargs)
+
+        self.fake_run = flaky
+        return attempts
+
+    def test_transient_stapling_retries_same_accepted_dmg_without_resigning_or_resubmission(self):
+        attempts = self.fail_cli_staples([
+            (68, 'Error Domain=NSURLErrorDomain Code=-1005 "The network connection was lost."',
+             SECRETS["NOTARYTOOL_PASSWORD"]),
+        ])
+        with patch.object(SIGN.time, "sleep") as sleep, patch.object(sys, "stdout", io.StringIO()) as output:
+            manifest = self.sign()
+        sleep.assert_called_once_with(5)
+        self.assertIn("attempt 2/3", output.getvalue())
+        self.assertIn("transient network failure", output.getvalue())
+        self.assertEqual(len(attempts), 2)
+        submitted = manifest["notarization"]["hash-cli-macOS.dmg"]["submitted_sha256"]
+        self.assertTrue(all(path == attempts[0][0] and digest == submitted and timeout == 60
+                            for path, digest, timeout in attempts))
+        submissions = [command for command, _ in self.commands
+                       if command[1:3] == ["notarytool", "submit"]]
+        self.assertEqual(len(submissions), 4)
+        self.assertEqual(len({command[3] for command in submissions}), 4)
+        self.assertEqual(sum("--sign" in command for command, _ in self.commands), 4)
+        self.assertTrue(any(command[1:3] == ["stapler", "validate"]
+                            and command[-1] == attempts[0][0] for command, _ in self.commands))
+        self.assertTrue(any(command[0] == "/usr/sbin/spctl" and command[-1] == attempts[0][0]
+                            for command, _ in self.commands))
+        receipts = (self.output / "signing-receipts.json").read_text()
+        self.assertNotIn(SECRETS["NOTARYTOOL_PASSWORD"], receipts)
+        events = [event for event in json.loads(receipts)
+                  if event["operation"].startswith("staple hash-cli-macOS.dmg")]
+        self.assertEqual([event["returncode"] for event in events], [68, 0])
+        self.assertIn("NSURLErrorDomain Code=-1005", events[0]["stdout"])
+
+    def test_transient_stapling_exhaustion_blocks_release_and_retains_all_attempts(self):
+        attempts = self.fail_cli_staples([
+            (68, "Error Domain=NSURLErrorDomain Code=-1005", "")] * 3)
+        with patch.object(SIGN.time, "sleep") as sleep:
+            with self.assertRaisesRegex(SIGN.GateError, "exhausted 3"):
+                self.sign()
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [5, 15])
+        self.assertEqual(len(attempts), 3)
+        self.assertEqual(len({(path, digest) for path, digest, _ in attempts}), 1)
+        self.assertEqual(sum(command[1:3] == ["notarytool", "submit"]
+                             for command, _ in self.commands), 4)
+        self.assertFalse(any(command[1:3] == ["stapler", "validate"]
+                             and command[-1] == attempts[0][0] for command, _ in self.commands))
+        self.assertFalse((self.output / "provenance.json").exists())
+        events = json.loads((self.output / "signing-receipts.json").read_text())
+        self.assertEqual(sum(event["operation"].startswith("staple hash-cli-macOS.dmg")
+                             for event in events), 3)
+
+    def test_permanent_stapling_error_aborts_immediately_even_with_exit_68(self):
+        attempts = self.fail_cli_staples([(68, "No ticket was found for this code.", "")])
+        with patch.object(SIGN.time, "sleep") as sleep:
+            with self.assertRaises(SIGN.GateError):
+                self.sign()
+        sleep.assert_not_called()
+        self.assertEqual(len(attempts), 1)
+        self.assertFalse((self.output / "provenance.json").exists())
+
+    def test_successful_stapling_never_sleeps_or_retries(self):
+        with patch.object(SIGN.time, "sleep") as sleep:
+            self.sign()
+        sleep.assert_not_called()
+        self.assertEqual(sum(command[1:3] == ["stapler", "staple"]
+                             for command, _ in self.commands), 2)
+
+    def test_retry_success_does_not_bypass_or_retry_staple_validation(self):
+        attempts = self.fail_cli_staples([(68, "Error Domain=NSURLErrorDomain Code=-1005", "")])
+        self.fail_operation = lambda command: (
+            command[1:3] == ["stapler", "validate"] and command[-1].endswith("hash-cli-macOS.dmg"))
+        with patch.object(SIGN.time, "sleep") as sleep:
+            with self.assertRaisesRegex(SIGN.GateError, "validate staple"):
+                self.sign()
+        sleep.assert_called_once_with(5)
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(sum(command[1:3] == ["stapler", "validate"]
+                             and command[-1] == attempts[0][0] for command, _ in self.commands), 1)
+        self.assertFalse(any(command[0] == "/usr/sbin/spctl" and command[-1] == attempts[0][0]
+                             for command, _ in self.commands))
+        self.assertFalse((self.output / "provenance.json").exists())
+
+    def test_stapling_network_classification_excludes_tls_unknown_and_other_failures(self):
+        for code in (-1001, -1003, -1004, -1005, -1006, -1009):
+            with self.subTest(transient=code):
+                self.assertTrue(SIGN.transient_staple_network_error({
+                    "returncode": 68, "stderr": f"Error Domain=NSURLErrorDomain Code={code}"}))
+        for event in (
+            {"returncode": 68, "stdout": "Error 68: ticket missing"},
+            {"returncode": 68, "stdout": "Error Domain=OtherDomain Code=-1005"},
+            {"returncode": 68, "stdout": "Error Domain=NSURLErrorDomain Code=-1202"},
+            {"returncode": 68, "stdout": "Error Domain=NSURLErrorDomain Code=-1200"},
+            {"returncode": 68, "stdout": "Error Domain=NSURLErrorDomain Code=-999"},
+            {"returncode": 68, "stdout": "Error Domain=NSURLErrorDomain Code=-1005 "
+             "Error Domain=NSURLErrorDomain Code=-1202"},
+            {"returncode": 1, "stdout": "Error Domain=NSURLErrorDomain Code=-1005"},
+            {"timed_out": True, "stdout": "Error Domain=NSURLErrorDomain Code=-1005"},
+        ):
+            with self.subTest(event=event):
+                self.assertFalse(SIGN.transient_staple_network_error(event))
+
+    def test_stapling_total_deadline_caps_last_attempt_timeout(self):
+        clock = [0]
+        timeouts = []
+        runner = SIGN.Runner({}, self.root / "staple-bounds.json")
+
+        def failed(command, **kwargs):
+            timeouts.append(kwargs["timeout"])
+            clock[0] += kwargs["timeout"]
+            return subprocess.CompletedProcess(
+                command, 68, "Error Domain=NSURLErrorDomain Code=-1005", "")
+
+        def sleep(delay):
+            clock[0] += delay
+
+        with patch.object(SIGN.time, "monotonic", side_effect=lambda: clock[0]):
+            with patch.object(SIGN.time, "sleep", side_effect=sleep):
+                with patch.object(SIGN.subprocess, "run", side_effect=failed):
+                    with self.assertRaisesRegex(SIGN.GateError, "exhausted 3"):
+                        SIGN.staple(runner, self.root / "accepted.dmg")
+        self.assertEqual(timeouts, [60, 60, 40])
+        self.assertEqual(clock[0], 180)
+
+    def test_stapling_subprocess_timeout_without_network_result_is_not_retried(self):
+        runner = SIGN.Runner({}, self.root / "staple-timeout.json")
+        with patch.object(SIGN.time, "sleep") as sleep:
+            with patch.object(SIGN.subprocess, "run",
+                              side_effect=subprocess.TimeoutExpired("stapler", 60)) as run:
+                with self.assertRaisesRegex(SIGN.GateError, "timed out"):
+                    SIGN.staple(runner, self.root / "accepted.dmg")
+        run.assert_called_once()
+        sleep.assert_not_called()
+        self.assertTrue(runner.events[0]["timed_out"])
+
     def test_raw_cli_non_app_assessment_is_recorded_honestly_after_real_ticket_checks(self):
         original = self.fake_run
 

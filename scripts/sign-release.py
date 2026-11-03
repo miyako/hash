@@ -38,6 +38,7 @@ import signal
 import stat
 import subprocess
 import sys
+import time
 from urllib.parse import quote, quote_plus
 import zipfile
 
@@ -57,6 +58,10 @@ MACHO = {bytes.fromhex(value) for value in (
     "feedface", "cefaedfe", "feedfacf", "cffaedfe",
     "cafebabe", "bebafeca", "cafebabf", "bfbafeca",
 )}
+STAPLE_BACKOFF = (5, 15)
+STAPLE_ATTEMPT_TIMEOUT = 60
+STAPLE_TOTAL_TIMEOUT = 180
+TRANSIENT_URL_ERRORS = {-1001, -1003, -1004, -1005, -1006, -1009}
 
 
 def sha256(path):
@@ -345,6 +350,55 @@ def notarize(runner, path, keychain, timeout, expected_tickets):
             "ticket_contents": coverage}
 
 
+def transient_staple_network_error(event):
+    if event.get("returncode") != 68 or event.get("timed_out"):
+        return False
+    diagnostics = event.get("stdout", "") + "\n" + event.get("stderr", "")
+    codes = {int(code) for code in re.findall(
+        r"\b(?:Error )?Domain=NSURLErrorDomain\s+Code=(-\d+)\b", diagnostics)}
+    return bool(codes) and codes <= TRANSIENT_URL_ERRORS
+
+
+def staple(runner, dmg):
+    deadline = time.monotonic() + STAPLE_TOTAL_TIMEOUT
+    attempts = len(STAPLE_BACKOFF) + 1
+    for attempt in range(1, attempts + 1):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            print(f"Stapling {dmg.name}: retry deadline exhausted", flush=True)
+            raise GateError(f"Stapling {dmg.name} exceeded its retry deadline")
+        timeout = min(STAPLE_ATTEMPT_TIMEOUT, remaining)
+        print(f"Stapling {dmg.name}: attempt {attempt}/{attempts}, "
+              f"timeout at most {timeout:.0f}s", flush=True)
+        start = len(runner.events)
+        try:
+            runner.run(f"staple {dmg.name} (attempt {attempt}/{attempts})",
+                       ["/usr/bin/xcrun", "stapler", "staple", dmg], timeout=timeout)
+            if time.monotonic() > deadline:
+                print(f"Stapling {dmg.name}: retry deadline exhausted", flush=True)
+                raise GateError(f"Stapling {dmg.name} exceeded its retry deadline")
+            return
+        except GateError:
+            if (len(runner.events) != start + 1
+                    or not transient_staple_network_error(runner.events[-1])):
+                print(f"Stapling {dmg.name} failed without a retryable network error; "
+                      "see redacted signing-receipts.json", flush=True)
+                raise
+            if attempt == attempts:
+                print(f"Stapling {dmg.name}: exhausted {attempts} transient-network attempts; "
+                      "release remains blocked", flush=True)
+                raise GateError(f"Stapling {dmg.name} exhausted {attempts} network attempts; "
+                                "see redacted signing-receipts.json") from None
+            delay = STAPLE_BACKOFF[attempt - 1]
+            if deadline - time.monotonic() <= delay:
+                print(f"Stapling {dmg.name}: insufficient time for another retry; "
+                      "release remains blocked", flush=True)
+                raise GateError(f"Stapling {dmg.name} has no retry time remaining") from None
+            print(f"Stapling {dmg.name}: transient network failure, retrying in {delay}s; "
+                  "attempt diagnostics retained in signing-receipts.json", flush=True)
+            time.sleep(delay)
+
+
 def assess_cli(runner, path):
     start = len(runner.events)
     try:
@@ -606,7 +660,7 @@ def sign_release(source, output, secrets, notary_timeout):
             payload = component_payload if folder == output / "component" else standalone_payload
             submissions[name] = notarize(runner, dmg, keychain, notary_timeout,
                                         expected_ticket_contents(name, payload, signatures[name]))
-            runner.run(f"staple {name}", ["/usr/bin/xcrun", "stapler", "staple", dmg], timeout=180)
+            staple(runner, dmg)
             runner.run(f"validate staple {name}", ["/usr/bin/xcrun", "stapler", "validate", dmg])
             stapled_signature = verify_signature(runner, dmg, team, identity)
             if stapled_signature != signatures[name]:

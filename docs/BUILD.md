@@ -129,6 +129,19 @@ ZIPs and raw CLIs cannot be stapled: notarized ZIP distribution relies on Apple'
 online ticket lookup. Payload signatures and DMG container signatures/assessments
 are checked separately. Windows binaries are not Apple-signed or notarized.
 
+Stapling retries only exit 68 accompanied by a transient `NSURLErrorDomain`
+code: timeout (-1001), host lookup/connectivity (-1003/-1004/-1006), connection
+lost (-1005), or offline (-1009). Each already Accepted DMG gets at most three
+staple attempts, with 5- and 15-second backoffs, at most 60 seconds per attempt,
+and a 180-second overall deadline (the last attempt is shortened if necessary).
+Retries reuse the same signed DMG without re-signing or resubmitting notarization.
+Every attempt retains redacted diagnostics in `signing-receipts.json`; CI progress
+identifies the attempt and backoff without printing credentials. Other exit-68
+failures, TLS/certificate errors, subprocess timeouts without an explicit
+transient network result, and exhausted retries fail closed. Staple validation,
+unchanged signatures/CDHashes, Gatekeeper assessment and publication gates remain
+mandatory; retrying does not bypass any of them.
+
 After signing/stapling, final file inventories and `SHA256SUMS` are regenerated.
 The workflow extracts final `hash.zip`, compiles a clean host against it, and
 runs the installed-component suite again. Pre-sign source/build provenance and
