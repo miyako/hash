@@ -1,6 +1,6 @@
 {
   "name": "hash",
-  "version": "20.0.1",
+  "version": "20.0.2",
   "description": "Streaming SHA-256 dependency component for 4D",
   "license": "MIT",
   "repository": "https://github.com/miyako/hash",
