@@ -90,7 +90,7 @@ verification, matching native source revision, and a clean source tree.
 Its native checksums describe bytes after local ad-hoc signing but before
 Developer ID signing. Keep these records separate from final distribution hashes.
 
-Run the manually dispatched **Signed notarized release candidate** workflow at
+Run the manually dispatched **Signed notarized release** workflow at
 the exact committed revision. It calls both native and component workflows in
 the same run, checks every native execution receipt against the bundled bytes,
 and requires diagnostic-free real compilation and installed execution. Only its
@@ -135,9 +135,100 @@ runs the installed-component suite again. Pre-sign source/build provenance and
 final-byte provenance remain distinct; embedded and standalone CLI signatures
 can legitimately produce different bytes.
 
-Do not tag/publish after a failed gate. Download the successful signed candidate,
-verify final checksums/signatures/tickets and bounded execution, then upload draft
-release assets at the exact tested source revision. Verify draft-uploaded bytes
-before publication and public bytes afterward. Keep the normal component release
-as GitHub's Latest; standalone CLI assets belong to that same release, not a
-competing newer release. Never overwrite an existing version or tag.
+### Manual release interface
+
+The workflow never bumps versions or pushes a source commit. Its required
+`version` input must equal the committed `package.json` version, in numeric
+`major.minor.patch` form. The tag is **exactly that version**, without a `v` or
+`release` prefix, matching the existing `20.0.1` release. That existing release,
+tag and all its assets are never changed. Publishing `20.0.1` again is intentionally
+rejected, even if its source differs.
+
+Before a new publication, choose the next version explicitly and commit matching
+values in `package.json`, `scripts/build-native.py` (`VERSION`), `cli/main.go`
+(`version` and the help banner), and the `--version` expectation in
+`cli/main_test.go`. Preflight rejects mismatched production version pins; the
+normal CLI tests check the expected output. Versioned test fixtures describing
+old sample releases need not be bumped. Merge the reviewed source/version changes
+to `main` before publishing. This workflow implementation does not itself choose
+or authorize a next version.
+
+In GitHub's **Actions** tab, select **Signed notarized release**, then **Run
+workflow**. For publication, select branch **main**, enter the exact committed
+version and enable **Publish a NEW version from main after all gates**. For a
+candidate-only rehearsal, leave that checkbox off (the default); feature branches
+are allowed for candidates. Candidate runs can use an already released version
+because they create no remote tag/release. The workflow must exist on the default
+branch before GitHub exposes manual dispatch in the UI.
+
+Equivalent commands, after checking out the intended reviewed source locally:
+
+```sh
+VERSION=$(python3 -c 'import json; print(json.load(open("package.json"))["version"])')
+# Candidate only; --ref may instead name the feature branch being rehearsed.
+gh workflow run release.yml --repo miyako/hash --ref main \
+  -f version="$VERSION" -F publish=false
+# Deliberate NEW public release, only after an explicit version-bump commit on main.
+gh workflow run release.yml --repo miyako/hash --ref main \
+  -f version="$VERSION" -F publish=true
+gh run list --repo miyako/hash --workflow release.yml --limit 5
+```
+
+These are dispatch instructions, not a request to publish the current version.
+The source is the immutable Actions dispatch SHA, not whichever commit happens
+to be `main` HEAD later. Both reusable build workflows and signing use that same
+source snapshot. The workflow accepts only manual dispatch in `miyako/hash`;
+publications additionally require `refs/heads/main`. PRs and forks cannot publish.
+The existing six Apple secrets above are sufficient; no new secret or personal
+access token is needed. All build, preflight and signing jobs have `contents: read`;
+only the final publication job receives the built-in token's `contents: write`.
+One repository-wide `signed-release` concurrency group serializes candidates and
+publications without cancelling an in-progress run. Pending Actions runs can
+still be superseded by newer pending runs; this is not an unlimited release queue.
+
+### Publication, outputs and failure handling
+
+The existing four-host native, real-4D compilation/runtime, Developer ID,
+notarization, stapling and extracted signed-component gates remain mandatory.
+Only a successful signing job uploads `release-publish-files`, containing the
+exact public files. The always-uploaded `signed-release-candidate` artifact is
+diagnostic evidence and may be incomplete on failure; it is **never** publication
+input. Publication downloads only the named successful artifact from the same
+run, validates its exact 15-file set, all final-byte `SHA256SUMS` entries and
+source/version/evidence links, then repeats the duplicate tag/release check.
+
+The public asset contract is:
+
+| Assets | Purpose |
+|---|---|
+| `hash.zip`, `hash.dmg` | Normal 4D dependency component; DMG carries an offline ticket |
+| `hash-cli-macOS.zip`, `hash-cli-macOS.dmg` | Standalone macOS CLI in the same component release |
+| `SHA256SUMS`, `provenance.json` | Complete final-byte checksums and signed provenance |
+| `pre-sign-provenance.json`, `pre-sign-native-verification.json` | Original component/build and four-host native evidence |
+| `signing-receipts.json` | Redacted signing/verification command receipts |
+| `signed-host-compile.json`, `signed-runtime-verification.json` | Diagnostic-free real-4D signed-component execution |
+| `notary-hash.zip.json`, `notary-hash.dmg.json`, `notary-hash-cli-macOS.zip.json`, `notary-hash-cli-macOS.dmg.json` | Four Accepted notarization logs |
+
+The publisher creates a **new draft**, uploads all 15 assets without replacement,
+checks the remote asset set, uploaded state and sizes, and downloads each asset
+through the authenticated API to compare its exact bytes with the validated
+candidate. Only then does it create a lightweight version tag at the tested SHA
+with the create-only Git ref API, verify that ref, and make the draft public and
+GitHub's Latest release. Notes link the exact source and Actions run/attempt.
+It rechecks the tag, public release and all downloaded public asset bytes afterward.
+The successful run summary links the release. Candidate-only runs stop after
+validation and artifact upload without any remote mutation.
+
+No signing or runtime failure can reach publication, and no unsigned fallback is
+provided. An existing tag, public release **or draft** blocks publication; tags,
+releases and assets are never overwritten, resumed, force-pushed or deleted.
+API/authentication errors other than an explicit missing-ref 404 fail closed.
+Upload, checksum, download or pre-publication API failures leave an unpublished
+draft for inspection, not a partial public release. A failure/cancellation after
+tag creation may also leave a tag; after the final public-state transition it may
+leave a complete public release even if the post-publication verification fails.
+Inspect the run, draft/tag and downloaded evidence before any explicit operator
+cleanup; a rerun deliberately refuses those existing objects. The workflow does
+not automatically delete them or roll back a public release. Repository rulesets
+must allow the publication token to create the new version tag; if they do not,
+the run fails rather than bypassing protection.
