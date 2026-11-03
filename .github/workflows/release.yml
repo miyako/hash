@@ -1,0 +1,74 @@
+name: Signed notarized release candidate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: signed-release
+  cancel-in-progress: false
+
+jobs:
+  native:
+    uses: ./.github/workflows/native.yml
+  component:
+    uses: ./.github/workflows/component.yml
+  sign:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'miyako/hash'
+    needs: [native, component]
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          path: build/release-inputs
+      - name: Require exact-source four-host execution and clean real 4D reports
+        run: python3 scripts/verify-release-inputs.py
+      - name: Sign actual code objects and notarize both distributions
+        env:
+          APPLE_DEVELOPER_ID_CERTIFICATE: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE }}
+          APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          NOTARYTOOL_APPLE_ID: ${{ secrets.NOTARYTOOL_APPLE_ID }}
+          NOTARYTOOL_PASSWORD: ${{ secrets.NOTARYTOOL_PASSWORD }}
+          NOTARYTOOL_TEAM_ID: ${{ secrets.NOTARYTOOL_TEAM_ID }}
+        run: python3 scripts/sign-release.py --input build/release --output build/signed-release
+      - name: Provision checksum-pinned 20.8 headless engine
+        run: |
+          set -euo pipefail
+          mkdir -p tools/4dcli build/tool-downloads
+          curl -fL --retry 2 --max-time 120 \
+            https://resources-download.4d.com/release/20.x/20.8/latest/mac/tool4d_arm64.tar.xz \
+            -o build/tool-downloads/tool4d-20.8-arm64.tar.xz
+          echo 'da9c977dd85d4ee506a5d0c115f17d9f27ea487f402f0d642f4f2e1b186b560d  build/tool-downloads/tool4d-20.8-arm64.tar.xz' | shasum -a 256 -c -
+          tar -xJf build/tool-downloads/tool4d-20.8-arm64.tar.xz -C tools/4dcli
+          codesign --verify --strict tools/4dcli/tool4d.app
+      - name: Execute the extracted signed component in a clean compiled host
+        run: |
+          set -euo pipefail
+          mkdir -p build/signed-extracted
+          ditto -x -k build/signed-release/hash.zip build/signed-extracted
+          python3 scripts/test-4d.py --engine "$PWD/tools/4dcli/tool4d.app/Contents/MacOS/tool4d" \
+            --component "$PWD/build/signed-extracted/hash.4dbase"
+          python3 scripts/finalize-release.py
+      - name: Remove ephemeral signing credentials even after cancellation
+        if: always()
+        run: python3 scripts/sign-release.py --cleanup
+      - name: Preserve final distributions and redacted notarization evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-release-candidate
+          path: |
+            build/publish-files/
+            build/signed-release/
+            build/4d/*-compile.json
+            build/4d/verification.json
+            build/4d/executions/
+          if-no-files-found: error

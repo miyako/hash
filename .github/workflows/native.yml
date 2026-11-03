@@ -11,6 +11,7 @@ on:
       - hash/Resources/licenses/Go-LICENSE.txt
       - .github/workflows/native.yml
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read

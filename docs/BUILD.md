@@ -86,15 +86,58 @@ Require the complete 4D harness, then package with `scripts/package-release.py`.
 The latter requires diagnostic-free compiler reports, successful installed-host
 verification, matching native source revision, and a clean source tree.
 
-Do not tag/publish after a failed gate. When all gates pass, upload `hash.zip`,
-`provenance.json`, and `SHA256SUMS` to an independently versioned `20.0.1` release.
-Download uploaded draft bytes, compare checksums, extract and rerun the installed
-fixture before publishing. Never overwrite an existing version or tag.
+`package-release.py` produces a **pre-sign candidate**, not a publishable release.
+Its native checksums describe bytes after local ad-hoc signing but before
+Developer ID signing. Keep these records separate from final distribution hashes.
 
-No Developer ID signing/notarization is claimed. Universal assembly is followed
-by explicit local ad-hoc signing and strict verification of **both** Mach-O slices
-(the Go Intel slice alone is not linker-signed). These are not Developer ID
-signatures, notarization, or Gatekeeper approval. The repository has no configured
-Apple signing/notarization credentials; local identities alone do not identify
-an authorized team/profile for this new component.
-If signing is added, generate checksums again **after** every byte-changing step.
+Run the manually dispatched **Signed notarized release candidate** workflow at
+the exact committed revision. It calls both native and component workflows in
+the same run, checks every native execution receipt against the bundled bytes,
+and requires diagnostic-free real compilation and installed execution. Only its
+trusted dispatch signing job receives these six repository secrets:
+
+```
+APPLE_DEVELOPER_ID_CERTIFICATE
+APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD
+KEYCHAIN_PASSWORD
+NOTARYTOOL_APPLE_ID
+NOTARYTOOL_PASSWORD
+NOTARYTOOL_TEAM_ID
+```
+
+The certificate is a base64-encoded PKCS#12 bundle. The signing identity must be
+a Developer ID Application certificate belonging to `NOTARYTOOL_TEAM_ID`; no
+additional identity secret or personal access token is required. Credentials
+are imported only into an ephemeral hosted-runner keychain and removed in both
+normal cleanup and an always-run workflow step. Pull requests never receive them.
+
+The release signer explicitly signs the actual compiled component library and
+the universal embedded CLI, using hardened runtime and secure timestamps.
+It does not sign `.4DZ`, JSON, or other resources as executable code. Neither this
+compute-only Go CLI nor the ahead-of-time compiled component library needs
+JIT/unsigned-executable-memory/disable-library-validation entitlements; host
+application permissions are not granted to these payloads.
+The checksum-pinned vendor tool4d host already carries
+`com.apple.security.cs.disable-library-validation`, allowing separately
+Developer-ID-signed component libraries. The release fixture verifies actual
+loading after re-signing rather than inferring compatibility from entitlements.
+
+Both `hash.zip` (normal dependency component) and `hash-cli-macOS.zip` (standalone
+CLI) must receive explicit notarization `Accepted` results. Accompanying DMGs are
+separately signed, notarized, stapled and validated for offline ticket carriage.
+ZIPs and raw CLIs cannot be stapled: notarized ZIP distribution relies on Apple's
+online ticket lookup. Payload signatures and DMG container signatures/assessments
+are checked separately. Windows binaries are not Apple-signed or notarized.
+
+After signing/stapling, final file inventories and `SHA256SUMS` are regenerated.
+The workflow extracts final `hash.zip`, compiles a clean host against it, and
+runs the installed-component suite again. Pre-sign source/build provenance and
+final-byte provenance remain distinct; embedded and standalone CLI signatures
+can legitimately produce different bytes.
+
+Do not tag/publish after a failed gate. Download the successful signed candidate,
+verify final checksums/signatures/tickets and bounded execution, then upload draft
+release assets at the exact tested source revision. Verify draft-uploaded bytes
+before publication and public bytes afterward. Keep the normal component release
+as GitHub's Latest; standalone CLI assets belong to that same release, not a
+competing newer release. Never overwrite an existing version or tag.

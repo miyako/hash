@@ -20,9 +20,9 @@ Execution is synchronous, suitable for a caller's existing background worker.
 On Windows an additional bounded architecture probe (at most two seconds) selects
 the ARM64 helper when running on Windows ARM. No shell or PowerShell is used.
 The x64 bootstrap uses Windows `IsWow64Process2`, not CPU-name or environment-variable
-heuristics. Windows ARM requires x64 emulation for this bootstrap (also needed by
-an x64 4D host). Older x64 Windows versions predating that API keep their native
-x64 target.
+heuristics. Windows ARM requires **Windows 11 ARM with x64 emulation** for this
+bootstrap (also needed by an x64 4D host); Windows 10 ARM is not supported.
+Older x64 Windows versions predating that API keep their native x64 target.
 
 Every result contains `success`, `digest`, `algorithm` (`"sha256"`), `message`,
 `code`, `stderr`, `stdout`, `timedOut`, and `errors`. `exitCode` is present when
@@ -40,12 +40,18 @@ callers must prevent concurrent changes when a stable-file guarantee is required
 The initial intended version is **20.0.1**. A release must pass the native and 4D
 gates described in [BUILD.md](docs/BUILD.md) before publication. Do not treat a
 source tag or an archive's existence as proof of a released, verified component.
+Release publication additionally requires Developer ID signatures and accepted
+notarization covering both the compiled component library and embedded CLI.
 
 For manual installation, extract `hash.zip` and place `hash.4dbase` in the host
 project's `Components/` directory. It contains `hash.4DZ`, `Libraries/`, and
 `Resources/` together; do not install the `.4DZ` alone. For the 4D dependency
 manager, pin repository `miyako/hash` to the exact published release tag in
 `Project/Sources/dependencies.json`; do not use a moving `latest` tag.
+`hash.zip` is the dependency-manager asset. Standalone CLI ZIP/DMG assets are
+separate distributions in the same component release. The signed, stapled
+component DMG supplies an offline notarization ticket; ZIPs cannot be stapled
+and use online notarization-ticket lookup.
 
 Declared source compatibility: **4D 20.7 LTS** (`compatibilityVersion: 2007`).
 Exact 20.7 execution is not available on the build host; this remains a documented

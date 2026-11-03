@@ -4,12 +4,13 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
 
 concurrency:
-  group: component-${{ github.ref }}
+  group: component-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
