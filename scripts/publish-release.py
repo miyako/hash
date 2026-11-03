@@ -39,6 +39,9 @@ class GitHub:
             payload = data if binary else json.dumps(data).encode()
             command += ["--input", "-", "-H", "Content-Type: " + (
                 "application/octet-stream" if binary else "application/json")]
+            if binary:
+                # uploads.github.com rejects unknown-length stdin bodies.
+                command += ["-H", f"Content-Length: {len(payload)}"]
         result = subprocess.run(command, input=payload, capture_output=True, timeout=300)
         header, separator, body = result.stdout.partition(b"\r\n\r\n")
         if not separator:
