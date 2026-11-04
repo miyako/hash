@@ -417,6 +417,32 @@ class IdentityAndTransportTests(unittest.TestCase):
                     PUBLISH.release_identity(root, VERSION, revision)
                 path.write_text(original)
 
+    def test_binary_upload_declares_exact_byte_length_without_changing_payload(self):
+        response = subprocess.CompletedProcess(
+            [], 0, b'HTTP/2.0 201 Created\r\n\r\n{"id":123}', b"")
+        for payload in (b"", b"\x00\xffbinary\r\n", "日本語".encode("utf-8")):
+            with self.subTest(payload=payload):
+                with patch.object(PUBLISH.subprocess, "run", return_value=response) as run:
+                    self.assertEqual(PUBLISH.GitHub().request(
+                        "POST", "https://uploads.github.com/example", payload), {"id": 123})
+                command = run.call_args.args[0]
+                self.assertIn(f"Content-Length: {len(payload)}", command)
+                self.assertIn("Content-Type: application/octet-stream", command)
+                self.assertEqual(command[command.index("--input") + 1], "-")
+                self.assertEqual(run.call_args.kwargs["input"], payload)
+                self.assertTrue(run.call_args.kwargs["capture_output"])
+                self.assertEqual(run.call_args.kwargs["timeout"], 300)
+                self.assertFalse(any("Authorization:" in part for part in command))
+
+    def test_json_transport_keeps_json_content_type_and_existing_failure_behavior(self):
+        response = subprocess.CompletedProcess([], 0, b'HTTP/2.0 201 Created\r\n\r\n{}', b"")
+        with patch.object(PUBLISH.subprocess, "run", return_value=response) as run:
+            PUBLISH.GitHub().request("POST", "endpoint", {"draft": True})
+        command = run.call_args.args[0]
+        self.assertIn("Content-Type: application/json", command)
+        self.assertFalse(any(part.startswith("Content-Length:") for part in command))
+        self.assertEqual(json.loads(run.call_args.kwargs["input"]), {"draft": True})
+
     def test_transport_only_404_is_absence_all_other_failures_stop(self):
         for code in (200, 201, 404, 403, 429, 500):
             with self.subTest(code=code):

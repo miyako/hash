@@ -175,6 +175,18 @@ source inventories, compilation/runtime receipts, provenance, assets and the
 eventual tag identify that SHA, **not** `github.sha` (the dispatch parent).
 The run summary records both revisions and the version transition.
 
+Release asset uploads declare the exact binary byte `Content-Length` even when
+streaming through `gh api --input -`; GitHub's upload endpoint rejects an
+unknown-length body. An upload failure leaves the draft private for inspection.
+Do not blindly rerun a partially published workflow: the tested version commit
+may already be on `main`, and another dispatch would increment it again.
+An explicitly approved recovery can retain the original prepared source and
+same-run finalized assets, audit the owned private draft and tag state, upload
+only absent assets without replacement, and require complete draft download/byte
+verification before create-only tagging and publication. Record the recovery
+separately; do not rewrite the original signing/run provenance or pretend its
+failed publication job passed.
+
 The read-only **Prepared release source validation** PR workflow exercises this
 same preparation, bundle artifact and reusable four-host/component workflow
 handoff on a local patch commit. It never calls release APIs, persists a source
